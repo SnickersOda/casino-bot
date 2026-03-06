@@ -1410,20 +1410,25 @@ def _parse_keyword(text: str) -> tuple[str | None, str | None]:
 
 
 @dp.message(F.text)
-@ensure_registered
 async def keyword_handler(message: Message, state: FSMContext):
-    """Обработчик русских ключевых слов.
-    Фильтруем команды / внутри — так надёжнее чем через MagicFilter.
-    """
+    """Обработчик русских ключевых слов."""
     txt = message.text or ""
-    if txt.startswith("/"):  # команды игнорируем
+
+    # Игнорируем команды /
+    if txt.startswith("/"):
         return
-    # Если юзер в FSM (например в диалоге с админкой) — не перехватываем
+
+    # Если юзер в FSM-состоянии (диалог с админкой) — не перехватываем
     if await state.get_state() is not None:
         return
+
     action, bet_str = _parse_keyword(txt)
     if action is None:
-        return  # не наше слово — игнорируем тихо
+        return  # не наше слово
+
+    # Регистрируем пользователя если нужно
+    u = message.from_user
+    db.register_user(u.id, u.username, u.full_name)
 
     uid  = message.from_user.id
     user = db.get_user(uid)
