@@ -676,122 +676,690 @@ async def cmd_roulette(message: Message):
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-#  БЛЭКДЖЕК  🃏
+#  ОДИНОЧНЫЙ БЛЭКДЖЕК  🃏  (против казино)
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-def _bj_card() -> tuple[str, int]:
-    """Случайная карта (название, очки)."""
-    suits  = ["♠","♥","♦","♣"]
-    values = [("2",2),("3",3),("4",4),("5",5),("6",6),("7",7),
-              ("8",8),("9",9),("10",10),("J",10),("Q",10),("K",10),("A",11)]
-    v = random.choice(values)
-    s = random.choice(suits)
-    return f"{v[0]}{s}", v[1]
 
+DECK_VALUES = [
+    ("2",2),("3",3),("4",4),("5",5),("6",6),("7",7),
+    ("8",8),("9",9),("10",10),("J",10),("Q",10),("K",10),("A",11)
+]
+SUITS = ["♠","♥","♦","♣"]
 
-def _bj_hand_value(cards: list[tuple[str, int]]) -> int:
-    total = sum(v for _, v in cards)
-    aces  = sum(1 for n, _ in cards if "A" in n)
+def _bj_card():
+    v = random.choice(DECK_VALUES)
+    s = random.choice(SUITS)
+    return (f"{v[0]}{s}", v[1])
+
+def _bj_val(cards):
+    total = sum(v for _,v in cards)
+    aces  = sum(1 for n,_ in cards if "A" in n)
     while total > 21 and aces:
-        total -= 10
-        aces  -= 1
+        total -= 10; aces -= 1
     return total
 
+def _bj_hand_str(cards):
+    return "  ".join(n for n,_ in cards)
 
 @dp.message(Command("blackjack"))
 @ensure_registered
 async def cmd_blackjack(message: Message):
     args = message.text.split()
     if len(args) < 2:
-        await message.answer("🃏 Использование: /blackjack <ставка>")
+        await message.answer(
+            "🃏 <b>Блэкджек против казино</b>\n\n"
+            "/blackjack &lt;ставка&gt; — одиночная игра\n"
+            "/bjroom — создать комнату для игры с другими\n\n"
+            "В одиночной игре можно добирать карты кнопками.",
+            parse_mode="HTML"
+        )
         return
-
     user = db.get_user(message.from_user.id)
     bet, err = validate_bet(user, args[1])
     if err:
-        await message.answer(err)
-        return
+        await message.answer(err); return
 
     db.update_coins(message.from_user.id, -bet)
 
     p = [_bj_card(), _bj_card()]
     d = [_bj_card(), _bj_card()]
 
-    p_val = _bj_hand_value(p)
-    d_val = _bj_hand_value(d)
+    # Сохраняем состояние одиночной игры
+    bj_solo_sessions[message.from_user.id] = {
+        "bet": bet, "player": p, "dealer": d, "done": False
+    }
 
-    # Казино добирает карты до 17
-    while d_val < 17:
+    await _bj_solo_show(message.from_user.id, message.chat.id)
+
+
+# Хранилище одиночных BJ сессий
+bj_solo_sessions: dict[int, dict] = {}
+
+
+async def _bj_solo_show(uid: int, chat_id: int, edit_msg=None):
+    sess = bj_solo_sessions.get(uid)
+    if not sess: return
+    p_val = _bj_val(sess["player"])
+    d_val = _bj_val(sess["dealer"])
+    p_str = _bj_hand_str(sess["player"])
+    # Дилер показывает только первую карту
+    d_str = f"{sess['dealer'][0][0]}  🂠"
+
+    status = ""
+    if p_val == 21 and len(sess["player"]) == 2:
+        status = "\n🎉 <b>БЛЭКДЖЕК!</b>"
+
+    text = (
+        f"🃏 <b>Блэкджек</b> — ставка {fmt_coins(sess['bet'])} 🪙\n"
+        f"{'─'*28}\n"
+        f"🏦 Дилер:  {d_str}  (? очков)\n"
+        f"👤 Ты:     {p_str}  = <b>{p_val}</b>{status}\n"
+        f"{'─'*28}\n"
+    )
+
+    if p_val == 21 and len(sess["player"]) == 2:
+        # Автоматический блэкджек
+        await _bj_solo_finish(uid, chat_id, edit_msg, auto_bj=True)
+        return
+    if p_val > 21:
+        await _bj_solo_finish(uid, chat_id, edit_msg)
+        return
+
+    kb = InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="➕ Ещё карту", callback_data=f"bj_hit_{uid}"),
+        InlineKeyboardButton(text="✋ Хватит",    callback_data=f"bj_stand_{uid}"),
+    ]])
+
+    if edit_msg:
+        try:
+            await edit_msg.edit_text(text, parse_mode="HTML", reply_markup=kb)
+        except: pass
+    else:
+        msg = await bot.send_message(chat_id, text, parse_mode="HTML", reply_markup=kb)
+        bj_solo_sessions[uid]["msg"] = msg
+
+
+async def _bj_solo_finish(uid: int, chat_id: int, edit_msg=None, auto_bj=False):
+    sess = bj_solo_sessions.pop(uid, None)
+    if not sess: return
+
+    p     = sess["player"]
+    d     = sess["dealer"]
+    bet   = sess["bet"]
+    p_val = _bj_val(p)
+
+    # Дилер добирает до 17
+    while _bj_val(d) < 17:
         d.append(_bj_card())
-        d_val = _bj_hand_value(d)
+    d_val = _bj_val(d)
 
-    p_hand = " ".join(c for c,_ in p)
-    d_hand = " ".join(c for c,_ in d)
+    p_str = _bj_hand_str(p)
+    d_str = _bj_hand_str(d)
 
     if p_val > 21:
-        result_text = "💥 Перебор у тебя!"
-        won         = False
+        result = f"💥 Перебор! -{fmt_coins(bet)} 🪙"
+        won = False
+    elif auto_bj:
+        payout = int(bet * 2.5)  # блэкджек платит 3:2
+        db.update_coins(uid, payout)
+        result = f"🎉 БЛЭКДЖЕК! +{fmt_coins(payout - bet)} 🪙"
+        won = True
     elif d_val > 21:
-        result_text = "🎉 Перебор у казино — ты победил!"
-        won         = True
+        payout = int(bet * 2)
+        db.update_coins(uid, payout)
+        result = f"🎉 Перебор у дилера! +{fmt_coins(payout - bet)} 🪙"
+        won = True
     elif p_val > d_val:
-        result_text = "🎉 Больше очков — победа!"
-        won         = True
+        payout = int(bet * 2)
+        db.update_coins(uid, payout)
+        result = f"🏆 Победа! +{fmt_coins(payout - bet)} 🪙"
+        won = True
     elif p_val == d_val:
-        result_text = "🤝 Ничья — ставка возвращена."
-        db.update_coins(message.from_user.id, bet)
-        db.update_task_progress(message.from_user.id, "play5")
-        user_after = db.get_user(message.from_user.id)
+        db.update_coins(uid, bet)
+        result = "🤝 Ничья — ставка возвращена"
+        won = False
+    else:
+        result = f"❌ Поражение. -{fmt_coins(bet)} 🪙"
+        won = False
+
+    db.record_game(uid, won, bet)
+    db.add_xp(uid, bet // 10 + 20 if won else 5)
+    db.update_task_progress(uid, "play5")
+    db.update_task_progress(uid, "bet1000", bet)
+    if won: db.update_task_progress(uid, "win3")
+
+    user_after = db.get_user(uid)
+    text = (
+        f"🃏 <b>Блэкджек — итог</b>\n"
+        f"{'─'*28}\n"
+        f"🏦 Дилер:  {d_str}  = {d_val}\n"
+        f"👤 Ты:     {p_str}  = {p_val}\n"
+        f"{'─'*28}\n"
+        f"{result}\n"
+        f"💼 Баланс: {fmt_coins(user_after['coins'])} 🪙"
+    )
+
+    if edit_msg:
+        try: await edit_msg.edit_text(text, parse_mode="HTML")
+        except: pass
+    else:
+        msg = bj_solo_sessions.get(uid, {}).get("msg")
+        try: await bot.send_message(chat_id, text, parse_mode="HTML")
+        except: pass
+
+
+@dp.callback_query(F.data.startswith("bj_hit_"))
+async def cb_bj_hit(callback: CallbackQuery):
+    uid = int(callback.data.replace("bj_hit_", ""))
+    if callback.from_user.id != uid:
+        await callback.answer("❌ Это не твоя игра!", show_alert=True); return
+    sess = bj_solo_sessions.get(uid)
+    if not sess or sess["done"]:
+        await callback.answer("Игра уже завершена!"); return
+    sess["player"].append(_bj_card())
+    await callback.answer()
+    await _bj_solo_show(uid, callback.message.chat.id, edit_msg=callback.message)
+
+
+@dp.callback_query(F.data.startswith("bj_stand_"))
+async def cb_bj_stand(callback: CallbackQuery):
+    uid = int(callback.data.replace("bj_stand_", ""))
+    if callback.from_user.id != uid:
+        await callback.answer("❌ Это не твоя игра!", show_alert=True); return
+    sess = bj_solo_sessions.get(uid)
+    if not sess or sess["done"]:
+        await callback.answer("Игра уже завершена!"); return
+    await callback.answer()
+    await _bj_solo_finish(uid, callback.message.chat.id, edit_msg=callback.message)
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+#  МУЛЬТИПЛЕЕРНЫЙ БЛЭКДЖЕК  🃏👥
+#  /bjroom — создать комнату
+#  /bjjoin <код> — войти
+#  /bjstart — начать игру
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+# Комнаты: код → {host, players, bets, hands, dealer, state, msg_ids, bet}
+bj_rooms: dict[str, dict] = {}
+# uid → код комнаты
+bj_player_room: dict[int, str] = {}
+
+
+def _bj_make_code():
+    return "".join(random.choices("ABCDEFGHJKLMNPQRSTUVWXYZ23456789", k=4))
+
+
+def _bj_room_text(room: dict) -> str:
+    lines = [
+        f"🃏 <b>Блэкджек — Комната #{room['code']}</b>\n",
+        f"👑 Хост: {room['host_name']}\n",
+        f"💸 Ставка: {fmt_coins(room['bet'])} 🪙\n",
+        f"{'─'*24}\n",
+        f"👥 Игроки ({len(room['players'])}/7):\n",
+    ]
+    for uid in room["players"]:
+        name = room["names"][uid]
+        lines.append(f"  • {name}\n")
+    if room["state"] == "waiting":
+        lines.append(f"\n<i>Ожидаем игроков...\nКод для входа: <code>{room['code']}</code></i>")
+    return "".join(lines)
+
+
+def _bj_room_kb(room: dict) -> InlineKeyboardMarkup:
+    if room["state"] == "waiting":
+        rows = [[InlineKeyboardButton(text="▶️ Начать игру", callback_data=f"bjr_start_{room['code']}")]]
+        return InlineKeyboardMarkup(inline_keyboard=rows)
+    return InlineKeyboardMarkup(inline_keyboard=[])
+
+
+def _bj_hand_text(room: dict) -> str:
+    """Строит текст игрового стола для всех."""
+    d_card1 = room["dealer"][0][0]
+    lines = [
+        f"🃏 <b>Блэкджек — Комната #{room['code']}</b>\n",
+        f"{'─'*24}\n",
+        f"🏦 <b>Дилер:</b>  {d_card1}  🂠\n",
+        f"{'─'*24}\n",
+    ]
+    for uid in room["players"]:
+        hand  = room["hands"][uid]
+        val   = _bj_val(hand)
+        name  = room["names"][uid]
+        cards = _bj_hand_str(hand)
+        done  = room["done_players"].get(uid, False)
+        bust  = val > 21
+        bj    = val == 21 and len(hand) == 2
+
+        if bust:   icon = "💥"
+        elif bj:   icon = "🎉"
+        elif done: icon = "✋"
+        else:      icon = "🎮"
+
+        current = " ◀ ходит" if uid == room.get("current_turn") and not done else ""
+        lines.append(f"{icon} <b>{name}</b>{current}\n   {cards} = {val}\n")
+
+    return "".join(lines)
+
+
+def _bj_turn_kb(uid: int, code: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="➕ Ещё карту", callback_data=f"bjm_hit_{code}_{uid}"),
+        InlineKeyboardButton(text="✋ Хватит",    callback_data=f"bjm_stand_{code}_{uid}"),
+    ]])
+
+
+async def _bj_broadcast(room: dict, text: str, kb=None):
+    """Отправить/обновить сообщение всем игрокам комнаты."""
+    for uid in room["players"]:
+        try:
+            old_msg = room["msg_ids"].get(uid)
+            if old_msg:
+                try:
+                    await bot.edit_message_text(
+                        text, chat_id=uid, message_id=old_msg,
+                        parse_mode="HTML",
+                        reply_markup=kb or InlineKeyboardMarkup(inline_keyboard=[])
+                    )
+                    continue
+                except: pass
+            msg = await bot.send_message(uid, text, parse_mode="HTML",
+                                         reply_markup=kb or InlineKeyboardMarkup(inline_keyboard=[]))
+            room["msg_ids"][uid] = msg.message_id
+        except: pass
+
+
+async def _bj_next_turn(room: dict):
+    """Переключить ход на следующего игрока."""
+    code    = room["code"]
+    players = room["players"]
+    current = room.get("current_turn")
+
+    # Ищем следующего кто ещё не закончил
+    idx     = players.index(current) if current in players else -1
+    next_uid = None
+    for i in range(1, len(players) + 1):
+        candidate = players[(idx + i) % len(players)]
+        if not room["done_players"].get(candidate):
+            val = _bj_val(room["hands"][candidate])
+            if val <= 21:
+                next_uid = candidate
+                break
+
+    if next_uid is None:
+        # Все закончили — ход дилера
+        await _bj_dealer_turn(room)
+        return
+
+    room["current_turn"] = next_uid
+    text = _bj_hand_text(room)
+
+    for uid in players:
+        kb = _bj_turn_kb(uid, code) if uid == next_uid else InlineKeyboardMarkup(inline_keyboard=[])
+        try:
+            old = room["msg_ids"].get(uid)
+            if old:
+                try:
+                    await bot.edit_message_text(text, chat_id=uid, message_id=old,
+                                                parse_mode="HTML", reply_markup=kb)
+                    continue
+                except: pass
+            msg = await bot.send_message(uid, text, parse_mode="HTML", reply_markup=kb)
+            room["msg_ids"][uid] = msg.message_id
+        except: pass
+
+    # Уведомляем чей ход
+    name = room["names"][next_uid]
+    try:
+        await bot.send_message(next_uid, f"👆 <b>Твой ход!</b>\nНажми «Ещё карту» или «Хватит».", parse_mode="HTML")
+    except: pass
+
+
+async def _bj_dealer_turn(room: dict):
+    """Дилер добирает карты, подводим итоги."""
+    # Раскрываем карты дилера
+    while _bj_val(room["dealer"]) < 17:
+        room["dealer"].append(_bj_card())
+
+    d_val  = _bj_val(room["dealer"])
+    d_str  = _bj_hand_str(room["dealer"])
+    code   = room["code"]
+
+    results_lines = [
+        f"🃏 <b>Блэкджек — Итоги #{code}</b>\n",
+        f"{'─'*24}\n",
+        f"🏦 Дилер: {d_str} = <b>{d_val}</b>{'  💥 Перебор!' if d_val > 21 else ''}\n",
+        f"{'─'*24}\n",
+    ]
+
+    for uid in room["players"]:
+        hand  = room["hands"][uid]
+        val   = _bj_val(hand)
+        name  = room["names"][uid]
+        bet   = room["bets"][uid]
+        cards = _bj_hand_str(hand)
+
+        bj21  = val == 21 and len(hand) == 2
+
+        if val > 21:
+            result = f"💥 Перебор — -{fmt_coins(bet)} 🪙"
+            won    = False
+            payout = 0
+        elif bj21:
+            payout = int(bet * 2.5)
+            db.update_coins(uid, payout)
+            result = f"🎉 БЛЭКДЖЕК! +{fmt_coins(payout - bet)} 🪙"
+            won    = True
+        elif d_val > 21 or val > d_val:
+            payout = int(bet * 2)
+            db.update_coins(uid, payout)
+            result = f"🏆 Победа! +{fmt_coins(payout - bet)} 🪙"
+            won    = True
+        elif val == d_val:
+            db.update_coins(uid, bet)
+            result = f"🤝 Ничья — ставка возвращена"
+            won    = False
+            payout = bet
+        else:
+            result = f"❌ Поражение — -{fmt_coins(bet)} 🪙"
+            won    = False
+            payout = 0
+
+        db.record_game(uid, won, bet)
+        db.add_xp(uid, bet // 10 + 20 if won else 5)
+        db.update_task_progress(uid, "play5")
+        db.update_task_progress(uid, "bet1000", bet)
+        if won: db.update_task_progress(uid, "win3")
+
+        user_after = db.get_user(uid)
+        results_lines.append(
+            f"{'🏆' if won else '❌'} <b>{name}</b>: {cards} = {val}\n"
+            f"   {result} | Баланс: {fmt_coins(user_after['coins'])} 🪙\n"
+        )
+
+    final_text = "".join(results_lines)
+    await _bj_broadcast(room, final_text)
+
+    # Убираем комнату
+    for uid in room["players"]:
+        bj_player_room.pop(uid, None)
+    bj_rooms.pop(code, None)
+
+
+@dp.message(Command("bjroom"))
+@ensure_registered
+async def cmd_bjroom(message: Message):
+    """Создать комнату мультиплеерного блэкджека."""
+    args = message.text.split()
+    uid  = message.from_user.id
+
+    if uid in bj_player_room:
+        await message.answer("⚠️ Ты уже в комнате! Выйди командой /bjleave")
+        return
+
+    if len(args) < 2:
         await message.answer(
-            f"🃏 <b>Блэкджек</b>\n\n"
-            f"Ты:     {p_hand} = {p_val}\n"
-            f"Казино: {d_hand} = {d_val}\n\n"
-            f"{result_text}\n💼 Баланс: {fmt_coins(user_after['coins'])} 🪙",
+            "🃏 Использование: /bjroom &lt;ставка&gt;\n"
+            "Пример: /bjroom 500\n\n"
+            "Затем другие игроки могут войти через /bjjoin &lt;код&gt;",
             parse_mode="HTML"
         )
         return
-    else:
-        result_text = "❌ Меньше очков — поражение."
-        won         = False
 
-    db.update_task_progress(message.from_user.id, "play5")
-    db.update_task_progress(message.from_user.id, "bet1000", bet)
+    user = db.get_user(uid)
+    bet, err = validate_bet(user, args[1])
+    if err:
+        await message.answer(err); return
 
-    if won:
-        payout = int(bet * config.MULTIPLIERS["blackjack"])
-        db.update_coins(message.from_user.id, payout)
-        db.record_game(message.from_user.id, True, bet)
-        db.add_xp(message.from_user.id, bet // 10 + 20)
-        db.update_task_progress(message.from_user.id, "win3")
-        result_text += f"\n+{fmt_coins(payout - bet)} 🪙"
-    else:
-        db.record_game(message.from_user.id, False, bet)
-        db.add_xp(message.from_user.id, 5)
-        result_text += f"\n-{fmt_coins(bet)} 🪙"
+    code = _bj_make_code()
+    while code in bj_rooms:
+        code = _bj_make_code()
 
-    user_after = db.get_user(message.from_user.id)
+    room = {
+        "code":         code,
+        "host":         uid,
+        "host_name":    message.from_user.full_name,
+        "players":      [uid],
+        "names":        {uid: message.from_user.full_name},
+        "bets":         {uid: bet},
+        "hands":        {},
+        "dealer":       [],
+        "done_players": {},
+        "current_turn": None,
+        "msg_ids":      {},
+        "state":        "waiting",
+        "bet":          bet,
+    }
+    bj_rooms[code]         = room
+    bj_player_room[uid]    = code
+
+    # Резервируем ставку
+    db.update_coins(uid, -bet)
+
+    msg = await message.answer(
+        _bj_room_text(room),
+        parse_mode="HTML",
+        reply_markup=_bj_room_kb(room)
+    )
+    room["msg_ids"][uid] = msg.message_id
+
     await message.answer(
-        f"🃏 <b>Блэкджек</b>\n\n"
-        f"Ты:     {p_hand} = {p_val}\n"
-        f"Казино: {d_hand} = {d_val}\n\n"
-        f"{result_text}\n💼 Баланс: {fmt_coins(user_after['coins'])} 🪙",
+        f"✅ Комната создана!\n\n"
+        f"Код для приглашения: <code>{code}</code>\n"
+        f"Поделись кодом с друзьями — они войдут через:\n"
+        f"<code>/bjjoin {code}</code>\n\n"
+        f"Когда все зайдут — нажми <b>«▶️ Начать игру»</b>",
         parse_mode="HTML"
     )
 
 
+@dp.message(Command("bjjoin"))
+@ensure_registered
+async def cmd_bjjoin(message: Message):
+    """Войти в комнату по коду."""
+    args = message.text.split()
+    uid  = message.from_user.id
+
+    if uid in bj_player_room:
+        await message.answer("⚠️ Ты уже в комнате! Выйди командой /bjleave")
+        return
+
+    if len(args) < 2:
+        await message.answer("🃏 Использование: /bjjoin &lt;код&gt;\nПример: /bjjoin ABCD", parse_mode="HTML")
+        return
+
+    code = args[1].upper()
+    room = bj_rooms.get(code)
+
+    if not room:
+        await message.answer("❌ Комната не найдена. Проверь код.")
+        return
+    if room["state"] != "waiting":
+        await message.answer("❌ Игра уже началась!")
+        return
+    if len(room["players"]) >= 7:
+        await message.answer("❌ Комната заполнена (макс. 7 игроков).")
+        return
+
+    bet  = room["bet"]
+    user = db.get_user(uid)
+    if user["coins"] < bet:
+        await message.answer(f"❌ Не хватает монет. Нужно {fmt_coins(bet)} 🪙, у тебя {fmt_coins(user['coins'])} 🪙")
+        return
+
+    db.update_coins(uid, -bet)
+    room["players"].append(uid)
+    room["names"][uid]  = message.from_user.full_name
+    room["bets"][uid]   = bet
+    bj_player_room[uid] = code
+
+    await message.answer(f"✅ Ты вошёл в комнату <b>#{code}</b>!\nСтавка: {fmt_coins(bet)} 🪙\nОжидай начала игры.", parse_mode="HTML")
+
+    # Обновляем лобби у всех
+    text = _bj_room_text(room)
+    for p_uid in room["players"]:
+        try:
+            old = room["msg_ids"].get(p_uid)
+            kb  = _bj_room_kb(room) if p_uid == room["host"] else InlineKeyboardMarkup(inline_keyboard=[])
+            if old:
+                await bot.edit_message_text(text, chat_id=p_uid, message_id=old, parse_mode="HTML", reply_markup=kb)
+            else:
+                msg = await bot.send_message(p_uid, text, parse_mode="HTML", reply_markup=kb)
+                room["msg_ids"][p_uid] = msg.message_id
+        except: pass
+
+
+@dp.message(Command("bjleave"))
+@ensure_registered
+async def cmd_bjleave(message: Message):
+    """Покинуть комнату (только до начала игры)."""
+    uid  = message.from_user.id
+    code = bj_player_room.get(uid)
+    if not code:
+        await message.answer("Ты не в комнате.")
+        return
+    room = bj_rooms.get(code)
+    if not room or room["state"] != "waiting":
+        await message.answer("❌ Нельзя выйти после начала игры!")
+        return
+
+    # Возврат ставки
+    db.update_coins(uid, room["bets"].get(uid, 0))
+    room["players"].remove(uid)
+    room["names"].pop(uid, None)
+    room["bets"].pop(uid, None)
+    bj_player_room.pop(uid, None)
+
+    await message.answer("👋 Ты вышел из комнаты. Ставка возвращена.")
+
+    if uid == room["host"]:
+        # Хост вышел — закрываем комнату
+        for p_uid in room["players"]:
+            db.update_coins(p_uid, room["bets"].get(p_uid, 0))
+            bj_player_room.pop(p_uid, None)
+            try: await bot.send_message(p_uid, "⚠️ Хост покинул комнату. Ставки возвращены.")
+            except: pass
+        bj_rooms.pop(code, None)
+    else:
+        # Обновляем лобби
+        text = _bj_room_text(room)
+        for p_uid in room["players"]:
+            try:
+                old = room["msg_ids"].get(p_uid)
+                kb  = _bj_room_kb(room) if p_uid == room["host"] else InlineKeyboardMarkup(inline_keyboard=[])
+                if old:
+                    await bot.edit_message_text(text, chat_id=p_uid, message_id=old, parse_mode="HTML", reply_markup=kb)
+            except: pass
+
+
+@dp.callback_query(F.data.startswith("bjr_start_"))
+async def cb_bjr_start(callback: CallbackQuery):
+    """Хост нажал «Начать игру»."""
+    code = callback.data.replace("bjr_start_", "")
+    room = bj_rooms.get(code)
+
+    if not room:
+        await callback.answer("Комната не найдена!", show_alert=True); return
+    if callback.from_user.id != room["host"]:
+        await callback.answer("Только хост может начать!", show_alert=True); return
+    if len(room["players"]) < 1:
+        await callback.answer("Нужен хотя бы 1 игрок!", show_alert=True); return
+    if room["state"] != "waiting":
+        await callback.answer("Игра уже идёт!"); return
+
+    room["state"] = "playing"
+
+    # Раздаём карты
+    room["dealer"] = [_bj_card(), _bj_card()]
+    for uid in room["players"]:
+        room["hands"][uid]        = [_bj_card(), _bj_card()]
+        room["done_players"][uid] = False
+
+    await callback.answer("🃏 Игра началась!")
+
+    # Показываем стол и начинаем с первого игрока
+    room["current_turn"] = room["players"][0]
+    text = _bj_hand_text(room)
+
+    for uid in room["players"]:
+        kb = _bj_turn_kb(uid, code) if uid == room["players"][0] else InlineKeyboardMarkup(inline_keyboard=[])
+        try:
+            msg = await bot.send_message(uid, text, parse_mode="HTML", reply_markup=kb)
+            room["msg_ids"][uid] = msg.message_id
+        except: pass
+
+    name = room["names"][room["players"][0]]
+    for uid in room["players"]:
+        if uid != room["players"][0]:
+            try: await bot.send_message(uid, f"👆 Сейчас ходит <b>{name}</b>", parse_mode="HTML")
+            except: pass
+
+
+@dp.callback_query(F.data.startswith("bjm_hit_"))
+async def cb_bjm_hit(callback: CallbackQuery):
+    parts = callback.data.split("_")  # bjm_hit_CODE_UID
+    code  = parts[2]
+    uid   = int(parts[3])
+
+    if callback.from_user.id != uid:
+        await callback.answer("❌ Не твой ход!", show_alert=True); return
+
+    room = bj_rooms.get(code)
+    if not room or room.get("current_turn") != uid:
+        await callback.answer("Сейчас не твой ход!", show_alert=True); return
+
+    room["hands"][uid].append(_bj_card())
+    val = _bj_val(room["hands"][uid])
+    await callback.answer(f"Карта взята! Сумма: {val}")
+
+    if val >= 21:
+        room["done_players"][uid] = True
+        if val > 21:
+            try: await bot.send_message(uid, f"💥 <b>Перебор!</b> У тебя {val} очков.", parse_mode="HTML")
+            except: pass
+        await _bj_next_turn(room)
+    else:
+        # Обновляем стол
+        text = _bj_hand_text(room)
+        kb   = _bj_turn_kb(uid, code)
+        for p_uid in room["players"]:
+            kb2 = kb if p_uid == uid else InlineKeyboardMarkup(inline_keyboard=[])
+            try:
+                old = room["msg_ids"].get(p_uid)
+                if old:
+                    await bot.edit_message_text(text, chat_id=p_uid, message_id=old, parse_mode="HTML", reply_markup=kb2)
+            except: pass
+
+
+@dp.callback_query(F.data.startswith("bjm_stand_"))
+async def cb_bjm_stand(callback: CallbackQuery):
+    parts = callback.data.split("_")
+    code  = parts[2]
+    uid   = int(parts[3])
+
+    if callback.from_user.id != uid:
+        await callback.answer("❌ Не твой ход!", show_alert=True); return
+
+    room = bj_rooms.get(code)
+    if not room or room.get("current_turn") != uid:
+        await callback.answer("Сейчас не твой ход!", show_alert=True); return
+
+    room["done_players"][uid] = True
+    await callback.answer("✋ Хватит!")
+    await _bj_next_turn(room)
+
+
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-#  КРАШ  🚀  (интерактивный — игрок сам жмёт "Забрать")
+#  КРАШ  🚀  (реальный реалтайм)
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-# Хранилище активных краш-сессий: user_id → {bet, crash_at, current, msg_id, cashed_out}
 crash_sessions: dict[int, dict] = {}
 
 
-def crash_cashout_kb(user_id: int, multiplier: float) -> InlineKeyboardMarkup:
-    """Кнопка «Забрать» с текущим коэффициентом."""
+def crash_cashout_kb(uid: int, mult: float) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[[
         InlineKeyboardButton(
-            text=f"💰 Забрать x{multiplier:.2f}",
-            callback_data=f"crash_cashout_{user_id}"
+            text=f"💰 ЗАБРАТЬ  x{mult:.2f}",
+            callback_data=f"crash_cashout_{uid}"
         )
     ]])
 
@@ -806,152 +1374,145 @@ async def cmd_crash(message: Message):
         await message.answer(
             "🚀 <b>Краш</b>\n\n"
             "Использование: /crash &lt;ставка&gt;\n\n"
-            "Ракета взлетает — нажми <b>«Забрать»</b> пока не поздно!\n"
-            "Если ракета рухнет раньше — проигрыш 💥",
+            "Ракета взлетает — нажми <b>«ЗАБРАТЬ»</b> пока не упала!\n"
+            "Коэффициент растёт каждые 1.5 сек. Не успел — теряешь ставку 💥",
             parse_mode="HTML"
         )
         return
 
-    # Защита: одна активная сессия на игрока
-    if uid in crash_sessions and not crash_sessions[uid].get("cashed_out") and not crash_sessions[uid].get("crashed"):
-        await message.answer("⚠️ У тебя уже есть активная игра! Нажми <b>«Забрать»</b>.", parse_mode="HTML")
+    sess = crash_sessions.get(uid)
+    if sess and not sess.get("done"):
+        await message.answer("⚠️ У тебя уже активная игра! Нажми <b>«ЗАБРАТЬ»</b>.", parse_mode="HTML")
         return
 
     user = db.get_user(uid)
     bet, err = validate_bet(user, args[1])
     if err:
-        await message.answer(err)
-        return
+        await message.answer(err); return
 
     db.update_coins(uid, -bet)
 
-    # Генерируем момент краша — экспоненциальное распределение (часто низкие, редко высокие)
-    crash_at = round(min(random.expovariate(0.4) + 1.0, 20.0), 2)
+    # Честный краш: экспоненциальное распределение
+    # ~45% упадёт до x2, ~25% до x4, ~15% до x7, ~15% выше
+    crash_at = round(min(random.expovariate(0.4) + 1.0, 30.0), 2)
+    crash_at = max(crash_at, 1.05)  # минимум x1.05
 
-    # Стартовое сообщение с кнопкой
     msg = await message.answer(
-        "🚀 <b>Краш — ракета взлетела!</b>\n\n"
-        "📈 Коэффициент: <b>x1.00</b>\n"
-        "[▂        ] \n\n"
+        f"🚀 <b>Ракета взлетела!</b>\n\n"
+        f"📈 Коэффициент: <b>x1.00</b>\n"
+        f"▱▱▱▱▱▱▱▱▱▱\n\n"
         f"💸 Ставка: {fmt_coins(bet)} 🪙\n"
-        "<i>Нажми «Забрать» пока ракета не упала!</i>",
+        f"💰 Получишь: <b>{fmt_coins(bet)} 🪙</b>\n\n"
+        f"⏱ <i>Нажми кнопку чтобы забрать!</i>",
         parse_mode="HTML",
         reply_markup=crash_cashout_kb(uid, 1.00)
     )
 
-    # Сохраняем сессию
     crash_sessions[uid] = {
-        "bet":        bet,
-        "crash_at":   crash_at,
-        "current":    1.0,
-        "msg_id":     msg.message_id,
-        "chat_id":    message.chat.id,
-        "cashed_out": False,
-        "crashed":    False,
-        "message":    msg,
+        "bet":      bet,
+        "crash_at": crash_at,
+        "current":  1.00,
+        "msg":      msg,
+        "done":     False,
     }
 
-    # Запускаем фоновую анимацию
-    asyncio.create_task(_crash_fly(uid, message))
+    asyncio.create_task(_crash_loop(uid))
 
 
-async def _crash_fly(uid: int, message: Message):
-    """Фоновая задача: анимирует рост коэффициента до краша."""
-    bar_chars = ["▂","▃","▄","▅","▆","▇","█","█","█","█"]
-    session   = crash_sessions[uid]
+async def _crash_loop(uid: int):
+    """Цикл краша — обновляет коэффициент каждые 1.5 сек."""
+    await asyncio.sleep(1.5)  # первая задержка перед стартом
 
-    multiplier = 1.0
-    step       = 0.15   # шаг роста за тик
-    delay      = 0.9    # секунд между тиками
+    BARS = [
+        "▱▱▱▱▱▱▱▱▱▱", "▰▱▱▱▱▱▱▱▱▱", "▰▰▱▱▱▱▱▱▱▱",
+        "▰▰▰▱▱▱▱▱▱▱", "▰▰▰▰▱▱▱▱▱▱", "▰▰▰▰▰▱▱▱▱▱",
+        "▰▰▰▰▰▰▱▱▱▱", "▰▰▰▰▰▰▰▱▱▱", "▰▰▰▰▰▰▰▰▱▱",
+        "▰▰▰▰▰▰▰▰▰▱", "▰▰▰▰▰▰▰▰▰▰",
+    ]
 
-    while multiplier < session["crash_at"]:
-        await asyncio.sleep(delay)
+    mult = 1.00
 
-        # Проверяем — игрок уже забрал?
-        if session.get("cashed_out"):
+    while True:
+        if uid not in crash_sessions:
+            return
+        sess = crash_sessions[uid]
+        if sess.get("done"):
             return
 
-        multiplier = round(multiplier + step, 2)
-        # Ускоряемся по мере роста
-        if multiplier > 3:
-            step  = 0.25
-            delay = 0.8
-        if multiplier > 6:
-            step  = 0.45
-            delay = 0.7
+        # Рост коэффициента
+        if mult < 2.0:
+            mult = round(mult + random.uniform(0.10, 0.20), 2)
+        elif mult < 5.0:
+            mult = round(mult + random.uniform(0.20, 0.40), 2)
+        else:
+            mult = round(mult + random.uniform(0.40, 0.80), 2)
 
-        multiplier = min(multiplier, session["crash_at"])
-        session["current"] = multiplier
+        crashed = mult >= sess["crash_at"]
+        if crashed:
+            mult = sess["crash_at"]
 
-        pct     = min((multiplier - 1.0) / 9.0, 1.0)
-        filled  = int(pct * 10)
-        bar     = "".join(bar_chars[min(filled, len(bar_chars)-1)] * filled + ["░"] * (10 - filled))
-        pot     = int(session["bet"] * multiplier)
+        sess["current"] = mult
+
+        bar_idx = min(int((mult - 1.0) / max(sess["crash_at"] - 1.0, 0.1) * 10), 10)
+        bar     = BARS[bar_idx]
+        pot     = int(sess["bet"] * mult)
+        fire    = "🔥" if mult > 3 else ("⚡" if mult > 6 else "")
+        rocket  = "💥" if crashed else "🚀"
 
         try:
-            await session["message"].edit_text(
-                f"🚀 <b>Краш — летим!</b>\n\n"
-                f"📈 Коэффициент: <b>x{multiplier:.2f}</b>\n"
-                f"[{bar}]\n\n"
-                f"💸 Ставка: {fmt_coins(session['bet'])} 🪙\n"
-                f"💰 Сейчас получишь: <b>{fmt_coins(pot)} 🪙</b>\n\n"
-                f"<i>Нажми «Забрать» пока не поздно!</i>",
+            await sess["msg"].edit_text(
+                f"{rocket} <b>{'КРАШ!' if crashed else 'Ракета летит!'}</b> {fire}\n\n"
+                f"📈 Коэффициент: <b>x{mult:.2f}</b>\n"
+                f"{bar}\n\n"
+                f"💸 Ставка: {fmt_coins(sess['bet'])} 🪙\n"
+                f"💰 {'Потерял:' if crashed else 'Получишь:'} <b>{fmt_coins(pot) if not crashed else fmt_coins(sess['bet'])} 🪙</b>"
+                + ("" if crashed else "\n\n⏱ <i>Нажми кнопку чтобы забрать!</i>"),
                 parse_mode="HTML",
-                reply_markup=crash_cashout_kb(uid, multiplier)
+                reply_markup=crash_cashout_kb(uid, mult) if not crashed else InlineKeyboardMarkup(inline_keyboard=[])
             )
         except Exception:
             pass
 
-    # Если дошли до crash_at — краш!
-    if not session.get("cashed_out"):
-        session["crashed"] = True
-        db.record_game(uid, False, session["bet"])
-        db.add_xp(uid, 5)
-        db.update_task_progress(uid, "play5")
-        db.update_task_progress(uid, "bet1000", session["bet"])
-        user_after = db.get_user(uid)
-        try:
-            await session["message"].edit_text(
-                f"💥 <b>КРАШ на x{session['crash_at']:.2f}!</b>\n\n"
-                f"Ракета упала 😢\n"
-                f"Потерял: -{fmt_coins(session['bet'])} 🪙\n\n"
-                f"💼 Баланс: {fmt_coins(user_after['coins'])} 🪙",
-                parse_mode="HTML"
-            )
-        except Exception:
-            pass
-        crash_sessions.pop(uid, None)
+        if crashed:
+            sess["done"] = True
+            db.record_game(uid, False, sess["bet"])
+            db.add_xp(uid, 5)
+            db.update_task_progress(uid, "play5")
+            db.update_task_progress(uid, "bet1000", sess["bet"])
+            user_after = db.get_user(uid)
+            try:
+                await sess["msg"].edit_text(
+                    f"💥 <b>КРАШ на x{mult:.2f}!</b>\n\n"
+                    f"▰▰▰▰▰▰▰▰▰▰  💥\n\n"
+                    f"Ракета взорвалась 😢\n"
+                    f"Потерял: -{fmt_coins(sess['bet'])} 🪙\n\n"
+                    f"💼 Баланс: {fmt_coins(user_after['coins'])} 🪙",
+                    parse_mode="HTML"
+                )
+            except: pass
+            crash_sessions.pop(uid, None)
+            return
+
+        await asyncio.sleep(1.5)
 
 
 @dp.callback_query(F.data.startswith("crash_cashout_"))
 async def cb_crash_cashout(callback: CallbackQuery):
-    """Игрок нажал «Забрать»."""
     uid = int(callback.data.replace("crash_cashout_", ""))
 
-    # Только сам игрок может нажать свою кнопку
     if callback.from_user.id != uid:
-        await callback.answer("❌ Это не твоя игра!", show_alert=True)
-        return
+        await callback.answer("❌ Это не твоя игра!", show_alert=True); return
 
-    session = crash_sessions.get(uid)
-    if not session:
-        await callback.answer("⚠️ Игра уже завершена.", show_alert=True)
-        return
+    sess = crash_sessions.get(uid)
+    if not sess:
+        await callback.answer("⚠️ Игра уже завершена!", show_alert=True); return
+    if sess.get("done"):
+        await callback.answer("💥 Ракета уже упала!", show_alert=True); return
 
-    if session.get("crashed"):
-        await callback.answer("💥 Ракета уже упала!", show_alert=True)
-        crash_sessions.pop(uid, None)
-        return
-
-    if session.get("cashed_out"):
-        await callback.answer("✅ Уже забрано!", show_alert=True)
-        return
-
-    # Фиксируем выход
-    session["cashed_out"] = True
-    exit_mult = session["current"]
-    bet       = session["bet"]
-    payout    = int(bet * exit_mult)
+    sess["done"] = True
+    mult   = sess["current"]
+    bet    = sess["bet"]
+    payout = int(bet * mult)
 
     db.update_coins(uid, payout)
     db.record_game(uid, True, bet)
@@ -963,18 +1524,17 @@ async def cb_crash_cashout(callback: CallbackQuery):
     user_after = db.get_user(uid)
     crash_sessions.pop(uid, None)
 
-    await callback.answer(f"✅ Забрал x{exit_mult:.2f}!", show_alert=False)
+    await callback.answer(f"✅ Забрал x{mult:.2f}!", show_alert=False)
 
     try:
         await callback.message.edit_text(
-            f"✅ <b>Забрал на x{exit_mult:.2f}!</b>\n\n"
-            f"Краш был на x{session['crash_at']:.2f}\n"
+            f"✅ <b>Забрал на x{mult:.2f}!</b>\n\n"
+            f"Краш был на x{sess['crash_at']:.2f}\n"
             f"💰 Выплата: {fmt_coins(payout)} 🪙  (+{fmt_coins(payout - bet)})\n\n"
             f"💼 Баланс: {fmt_coins(user_after['coins'])} 🪙",
             parse_mode="HTML"
         )
-    except Exception:
-        pass
+    except: pass
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -1385,7 +1945,8 @@ _KW = [
     (("слоты","слот","барабан","крути","🎰"),          "slots"),
     (("кости","кубик","бросай","кидай","кинь"),        "dice"),
     (("рулетка","рулетку","колесо"),                   "roulette"),
-    (("карты","блэкджек","блек","двадцать один"),       "blackjack"),
+    (("карты","блэкджек","блек","двадцать один","21"),  "blackjack"),
+    (("комната","bjroom","блэк комната"),               "bjroom"),
     (("краш","крэш","ракета"),                         "crash"),
     # меню
     (("баланс","бабки","счёт","деньги"),               "balance"),
@@ -1461,6 +2022,9 @@ async def keyword_handler(message: Message, state: FSMContext):
         elif action == "blackjack":
             message.text = f"/blackjack {bet_str}"
             await cmd_blackjack(message)
+        elif action == "bjroom":
+            message.text = f"/bjroom {bet_str}"
+            await cmd_bjroom(message)
         elif action == "crash":
             message.text = f"/crash {bet_str}"
             await cmd_crash(message)
@@ -1932,7 +2496,10 @@ async def on_startup():
         BotCommand(command="slots",      description="🎰 Слоты (с анимацией)"),
         BotCommand(command="dice",       description="🎲 Кости — угадай больше"),
         BotCommand(command="roulette",   description="🎡 Рулетка red/black"),
-        BotCommand(command="blackjack",  description="🃏 Блэкджек — 21 очко"),
+        BotCommand(command="blackjack",  description="🃏 Блэкджек против казино"),
+        BotCommand(command="bjroom",     description="🃏👥 Создать комнату блэкджека"),
+        BotCommand(command="bjjoin",     description="🃏 Войти в комнату по коду"),
+        BotCommand(command="bjleave",    description="🚪 Выйти из комнаты"),
         BotCommand(command="crash",      description="🚀 Краш — не упусти момент"),
         BotCommand(command="profile",    description="👤 Мой профиль"),
         BotCommand(command="balance",    description="💰 Текущий баланс"),
