@@ -110,31 +110,42 @@ def _random_reel() -> list[str]:
 def _build_slot_frame(reels: list[list[str]], locked: list[bool],
                       spinning_cols: list[int]) -> str:
     """
-    Формирует строку кадра слотов.
-    reels        — список из 3 столбцов, каждый столбец = список из 3 символов
-    locked       — True если барабан уже остановился
-    spinning_cols — индексы барабанов, которые ещё крутятся (для индикатора)
+    Формирует кадр слотов без псевдографики — только эмодзи.
+    Крутящиеся барабаны показываем через 🌀, остановившиеся — сам символ.
+    Центральная (выигрышная) строка выделяется стрелками.
     """
-    rows = []
-    for row_i in range(3):
-        cells = []
-        for col_i, col in enumerate(reels):
-            sym = col[row_i]
-            if col_i in spinning_cols:
-                cells.append(f"[{sym}]")
-            else:
-                cells.append(f" {sym} ")
-        rows.append("  ".join(cells))
+    # Для крутящихся барабанов показываем анимационный символ
+    SPIN_ANIM = ["🌀", "⚡", "💫"]   # меняется каждый кадр случайно
 
-    sep  = "─" * 22
-    mid  = rows[1]  # центральная строка — выигрышная линия
-    # Подсветить центральную линию
+    def cell(col_i, row_i):
+        sym = reels[col_i][row_i]
+        if col_i in spinning_cols:
+            return random.choice(SPIN_ANIM)
+        return sym
+
+    # Строим 3 строки × 3 колонки
+    r0 = f"{cell(0,0)}  {cell(1,0)}  {cell(2,0)}"
+    r1 = f"{cell(0,1)}  {cell(1,1)}  {cell(2,1)}"   # выигрышная
+    r2 = f"{cell(0,2)}  {cell(1,2)}  {cell(2,2)}"
+
+    # Статус барабанов снизу
+    status = ""
+    for i in range(3):
+        if i not in spinning_cols:
+            status += "🔒"
+        else:
+            status += "🔄"
+
     frame = (
-        f"┌{sep}┐\n"
-        f"│  {'  '.join(r.strip() for r in [rows[0]])}  │\n"
-        f"│▶ {mid.strip()} ◀│  ← выигрышная линия\n"
-        f"│  {'  '.join(r.strip() for r in [rows[2]])}  │\n"
-        f"└{sep}┘"
+        f"╔═══════════════╗\n"
+        f"║  {r0}  ║\n"
+        f"╠═══════════════╣\n"
+        f"║▶ {r1} ◀║\n"
+        f"╠═══════════════╣\n"
+        f"║  {r2}  ║\n"
+        f"╚═══════════════╝\n"
+        f"  {status[0]}        {status[1]}        {status[2]}\n"
+        f"  1️⃣      2️⃣      3️⃣"
     )
     return frame
 
@@ -149,7 +160,7 @@ async def animate_slots(message: Message, final_reels: list[list[str]]) -> Messa
     spinning = [0, 1, 2]
     current_reels = [_random_reel(), _random_reel(), _random_reel()]
 
-    header = "🎰 <b>КРУТИМ БАРАБАНЫ...</b>\n\n"
+    header = "🎰 <b>КРУТИМ БАРАБАНЫ...</b>\n<i>Выигрышная линия — средняя строка</i>\n\n"
     msg    = await message.answer(header + _build_slot_frame(current_reels, [], spinning),
                                   parse_mode="HTML")
 
@@ -192,7 +203,7 @@ async def animate_slots(message: Message, final_reels: list[list[str]]) -> Messa
             fixed[fix_idx] = final_reels[fix_idx]
 
     # Финальный кадр — все остановились
-    result_line = "\n\n✨ <b>Результат!</b>"
+    result_line = "\n\n✨ <b>Барабаны остановились!</b>"
     try:
         await msg.edit_text(
             header + _build_slot_frame(final_reels, [], []) + result_line,
