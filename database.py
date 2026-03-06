@@ -1,6 +1,5 @@
 # ============================================================
 #  database.py — PostgreSQL (Railway) + SQLite (локально)
-#  Автоматически выбирает БД по DATABASE_URL
 # ============================================================
 import os, json, time
 from datetime import datetime, date
@@ -15,19 +14,45 @@ else:
     import sqlite3
     from config import DB_FILE
 
+# ── Для SQLite: одно соединение на весь процесс (без блокировок) ──
+_sqlite_conn = None
 
 def get_conn():
+    global _sqlite_conn
     if USE_PG:
-        return psycopg2.connect(DATABASE_URL, cursor_factory=psycopg2.extras.RealDictCursor)
-    conn = sqlite3.connect(DB_FILE)
-    conn.row_factory = sqlite3.Row
-    return conn
+        conn = psycopg2.connect(DATABASE_URL, cursor_factory=psycopg2.extras.RealDictCursor)
+        conn.autocommit = False
+        return conn
+    # SQLite: переиспользуем одно соединение с таймаутом
+    if _sqlite_conn is None:
+        _sqlite_conn = sqlite3.connect(
+            DB_FILE,
+            check_same_thread=False,
+            timeout=30,
+            isolation_level=None   # autocommit mode
+        )
+        _sqlite_conn.row_factory = sqlite3.Row
+        _sqlite_conn.execute("PRAGMA journal_mode=WAL")   # WAL — без блокировок
+        _sqlite_conn.execute("PRAGMA synchronous=NORMAL")
+    return _sqlite_conn
+
+def _commit(conn):
+    if USE_PG:
+        conn.commit()
+    # SQLite в autocommit — коммит не нужен
+
+def _close(conn):
+    if USE_PG:
+        conn.close()
+    # SQLite соединение не закрываем — переиспользуем
 
 def _q(sql):
     return sql.replace("?", "%s") if USE_PG else sql
 
 def _exec(conn, sql, params=()):
-    c = conn.cursor(); c.execute(_q(sql), params); return c
+    c = conn.cursor()
+    c.execute(_q(sql), params)
+    return c
 
 def _one(conn, sql, params=()):
     row = _exec(conn, sql, params).fetchone()
@@ -97,8 +122,10 @@ def init_db():
             _exec(conn, "INSERT OR IGNORE INTO settings (key,value) VALUES (?,?)",
                   (f"win_chance_{game}", str(chance)))
 
-    conn.commit(); conn.close()
+    _commit(conn)
+    _close(conn)
     print(f"✅ БД: {'PostgreSQL' if USE_PG else 'SQLite'}")
+    print("✅ База данных инициализирована")
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -107,46 +134,49 @@ def init_db():
 def get_user(user_id):
     conn = get_conn()
     r = _one(conn, "SELECT * FROM users WHERE user_id=?", (user_id,))
-    conn.close(); return r
+    _close(conn); return r
 
 def register_user(user_id, username, full_name):
     conn = get_conn()
     if USE_PG:
-        _exec(conn, "INSERT INTO users (user_id,username,full_name,coins,registered) VALUES (%s,%s,%s,%s,%s) ON CONFLICT (user_id) DO NOTHING",
+        _exec(conn, """INSERT INTO users (user_id,username,full_name,coins,registered)
+              VALUES (%s,%s,%s,%s,%s) ON CONFLICT (user_id) DO NOTHING""",
               (user_id, username or "", full_name or "Игрок", START_COINS, int(time.time())))
     else:
-        _exec(conn, "INSERT OR IGNORE INTO users (user_id,username,full_name,coins,registered) VALUES (?,?,?,?,?)",
+        _exec(conn, """INSERT OR IGNORE INTO users (user_id,username,full_name,coins,registered)
+              VALUES (?,?,?,?,?)""",
               (user_id, username or "", full_name or "Игрок", START_COINS, int(time.time())))
-    conn.commit(); conn.close()
+    _commit(conn); _close(conn)
 
 def update_coins(user_id, amount):
     conn = get_conn()
-    sql = "UPDATE users SET coins=GREATEST(0,coins+?) WHERE user_id=?" if USE_PG else "UPDATE users SET coins=MAX(0,coins+?) WHERE user_id=?"
+    sql = ("UPDATE users SET coins=GREATEST(0,coins+%s) WHERE user_id=%s" if USE_PG
+           else "UPDATE users SET coins=MAX(0,coins+?) WHERE user_id=?")
     _exec(conn, sql, (amount, user_id))
-    conn.commit(); conn.close()
+    _commit(conn); _close(conn)
 
 def set_coins(user_id, amount):
     conn = get_conn()
     _exec(conn, "UPDATE users SET coins=? WHERE user_id=?", (max(0,amount), user_id))
-    conn.commit(); conn.close()
+    _commit(conn); _close(conn)
 
 def add_xp(user_id, xp):
     conn = get_conn()
     row = _one(conn, "SELECT level,xp FROM users WHERE user_id=?", (user_id,))
-    if not row: conn.close(); return
+    if not row: _close(conn); return
     new_xp, new_level = row["xp"] + xp, row["level"]
     while new_level < max(LEVELS.keys()) and new_xp >= LEVELS[new_level]:
         new_xp -= LEVELS[new_level]; new_level += 1
     _exec(conn, "UPDATE users SET xp=?,level=? WHERE user_id=?", (new_xp, new_level, user_id))
-    conn.commit(); conn.close()
+    _commit(conn); _close(conn)
 
 def record_game(user_id, won, bet):
     conn = get_conn()
     if won:
-        _exec(conn, "UPDATE users SET wins=wins+1,total_bet=total_bet+? WHERE user_id=?", (bet, user_id))
+        _exec(conn, "UPDATE users SET wins=wins+1,total_bet=total_bet+? WHERE user_id=?", (bet,user_id))
     else:
-        _exec(conn, "UPDATE users SET losses=losses+1,total_bet=total_bet+? WHERE user_id=?", (bet, user_id))
-    conn.commit(); conn.close()
+        _exec(conn, "UPDATE users SET losses=losses+1,total_bet=total_bet+? WHERE user_id=?", (bet,user_id))
+    _commit(conn); _close(conn)
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -160,10 +190,10 @@ def claim_daily(user_id):
     if user["daily_last"] == today:
         now = datetime.now()
         secs = 86400 - (now.hour*3600 + now.minute*60 + now.second)
-        conn.close(); return {"ok": False, "seconds_left": secs}
+        _close(conn); return {"ok": False, "seconds_left": secs}
     bonus = DAILY_BONUS * 2 if user["is_vip"] else DAILY_BONUS
-    _exec(conn, "UPDATE users SET daily_last=?,coins=coins+? WHERE user_id=?", (today, bonus, user_id))
-    conn.commit(); conn.close()
+    _exec(conn, "UPDATE users SET daily_last=?,coins=coins+? WHERE user_id=?", (today,bonus,user_id))
+    _commit(conn); _close(conn)
     return {"ok": True, "amount": bonus}
 
 
@@ -173,13 +203,14 @@ def claim_daily(user_id):
 def set_vip(user_id, days):
     conn = get_conn()
     _exec(conn, "UPDATE users SET is_vip=1,vip_until=? WHERE user_id=?",
-          (int(time.time()) + days*86400, user_id))
-    conn.commit(); conn.close()
+          (int(time.time())+days*86400, user_id))
+    _commit(conn); _close(conn)
 
 def check_vip_expired():
     conn = get_conn()
-    _exec(conn, "UPDATE users SET is_vip=0 WHERE is_vip=1 AND vip_until>0 AND vip_until<?", (int(time.time()),))
-    conn.commit(); conn.close()
+    _exec(conn, "UPDATE users SET is_vip=0 WHERE is_vip=1 AND vip_until>0 AND vip_until<?",
+          (int(time.time()),))
+    _commit(conn); _close(conn)
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -188,7 +219,7 @@ def check_vip_expired():
 def get_tasks(user_id):
     conn = get_conn()
     user = _one(conn, "SELECT tasks_date,tasks_json FROM users WHERE user_id=?", (user_id,))
-    conn.close()
+    _close(conn)
     today = str(date.today())
     if not user or user["tasks_date"] != today:
         fresh = {t["id"]: {"progress":0,"done":False} for t in DAILY_TASKS}
@@ -199,7 +230,7 @@ def _save_tasks(user_id, day, tasks):
     conn = get_conn()
     _exec(conn, "UPDATE users SET tasks_date=?,tasks_json=? WHERE user_id=?",
           (day, json.dumps(tasks), user_id))
-    conn.commit(); conn.close()
+    _commit(conn); _close(conn)
 
 def update_task_progress(user_id, task_id, amount=1):
     tasks = get_tasks(user_id)
@@ -228,29 +259,26 @@ def create_promo(code, coins=0, vip_days=0, max_uses=1, expires_days=0, note="")
               VALUES (%s,%s,%s,%s,0,%s,%s,%s) ON CONFLICT (code) DO NOTHING""",
               (code.upper(), coins, vip_days, max_uses, int(time.time()), expires_at, note))
     else:
-        _exec(conn, """INSERT OR IGNORE INTO promocodes (code,coins,vip_days,max_uses,uses,created_at,expires_at,note)
+        _exec(conn, """INSERT OR IGNORE INTO promocodes
+              (code,coins,vip_days,max_uses,uses,created_at,expires_at,note)
               VALUES (?,?,?,?,0,?,?,?)""",
               (code.upper(), coins, vip_days, max_uses, int(time.time()), expires_at, note))
-    conn.commit(); conn.close()
+    _commit(conn); _close(conn)
 
 def use_promo(user_id, code) -> dict:
-    """Активировать промокод. Возвращает результат."""
     conn = get_conn()
     promo = _one(conn, "SELECT * FROM promocodes WHERE code=?", (code.upper(),))
     if not promo:
-        conn.close(); return {"ok": False, "err": "Промокод не найден"}
-
+        _close(conn); return {"ok": False, "err": "Промокод не найден"}
     if promo["expires_at"] > 0 and promo["expires_at"] < int(time.time()):
-        conn.close(); return {"ok": False, "err": "Промокод истёк"}
-
+        _close(conn); return {"ok": False, "err": "Промокод истёк"}
     if promo["uses"] >= promo["max_uses"]:
-        conn.close(); return {"ok": False, "err": "Промокод уже использован максимальное число раз"}
-
-    already = _one(conn, "SELECT 1 FROM promo_used WHERE code=? AND user_id=?", (code.upper(), user_id))
+        _close(conn); return {"ok": False, "err": "Промокод уже использован максимальное число раз"}
+    already = _one(conn, "SELECT 1 as x FROM promo_used WHERE code=? AND user_id=?",
+                   (code.upper(), user_id))
     if already:
-        conn.close(); return {"ok": False, "err": "Ты уже использовал этот промокод"}
+        _close(conn); return {"ok": False, "err": "Ты уже использовал этот промокод"}
 
-    # Применяем
     if USE_PG:
         _exec(conn, "INSERT INTO promo_used (code,user_id,used_at) VALUES (%s,%s,%s)",
               (code.upper(), user_id, int(time.time())))
@@ -260,24 +288,25 @@ def use_promo(user_id, code) -> dict:
               (code.upper(), user_id, int(time.time())))
         _exec(conn, "UPDATE promocodes SET uses=uses+1 WHERE code=?", (code.upper(),))
 
-    if promo["coins"] > 0:
-        update_coins(user_id, promo["coins"])
-    if promo["vip_days"] > 0:
-        set_vip(user_id, promo["vip_days"])
+    coins    = promo["coins"]
+    vip_days = promo["vip_days"]
+    _commit(conn); _close(conn)
 
-    conn.commit(); conn.close()
-    return {"ok": True, "coins": promo["coins"], "vip_days": promo["vip_days"]}
+    if coins > 0:    update_coins(user_id, coins)
+    if vip_days > 0: set_vip(user_id, vip_days)
+
+    return {"ok": True, "coins": coins, "vip_days": vip_days}
 
 def get_all_promos():
     conn = get_conn()
     rows = _all(conn, "SELECT * FROM promocodes ORDER BY created_at DESC")
-    conn.close(); return rows
+    _close(conn); return rows
 
 def delete_promo(code):
     conn = get_conn()
     _exec(conn, "DELETE FROM promocodes WHERE code=?", (code.upper(),))
     _exec(conn, "DELETE FROM promo_used WHERE code=?", (code.upper(),))
-    conn.commit(); conn.close()
+    _commit(conn); _close(conn)
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -285,22 +314,24 @@ def delete_promo(code):
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 def get_top(limit=10):
     conn = get_conn()
-    rows = _all(conn, "SELECT user_id,full_name,coins,level,wins FROM users ORDER BY coins DESC LIMIT ?", (limit,))
-    conn.close(); return rows
+    rows = _all(conn,
+        "SELECT user_id,full_name,coins,level,wins FROM users ORDER BY coins DESC LIMIT ?",
+        (limit,))
+    _close(conn); return rows
 
 def get_setting(key, default=None):
     conn = get_conn()
     row = _one(conn, "SELECT value FROM settings WHERE key=?", (key,))
-    conn.close(); return row["value"] if row else default
+    _close(conn); return row["value"] if row else default
 
 def set_setting(key, value):
     conn = get_conn()
     if USE_PG:
-        _exec(conn, "INSERT INTO settings (key,value) VALUES (%s,%s) ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value",
-              (key, value))
+        _exec(conn, """INSERT INTO settings (key,value) VALUES (%s,%s)
+              ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value""", (key, value))
     else:
         _exec(conn, "INSERT OR REPLACE INTO settings (key,value) VALUES (?,?)", (key, value))
-    conn.commit(); conn.close()
+    _commit(conn); _close(conn)
 
 def get_win_chance(game):
     val = get_setting(f"win_chance_{game}")
@@ -318,9 +349,9 @@ def get_stats():
                              (int(time.time())-86400,))["c"],
         "promo_count":  _one(conn,"SELECT COUNT(*) as c FROM promocodes")["c"],
     }
-    conn.close(); return r
+    _close(conn); return r
 
 def get_all_user_ids():
     conn = get_conn()
     rows = _all(conn, "SELECT user_id FROM users")
-    conn.close(); return [r["user_id"] for r in rows]
+    _close(conn); return [r["user_id"] for r in rows]
