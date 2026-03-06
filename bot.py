@@ -1409,11 +1409,19 @@ def _parse_keyword(text: str) -> tuple[str | None, str | None]:
     return action, bet_str
 
 
-@dp.message(F.text & ~F.text.startswith("/"))
+@dp.message(F.text)
 @ensure_registered
-async def keyword_handler(message: Message):
-    """Обработчик русских ключевых слов."""
-    action, bet_str = _parse_keyword(message.text or "")
+async def keyword_handler(message: Message, state: FSMContext):
+    """Обработчик русских ключевых слов.
+    Фильтруем команды / внутри — так надёжнее чем через MagicFilter.
+    """
+    txt = message.text or ""
+    if txt.startswith("/"):  # команды игнорируем
+        return
+    # Если юзер в FSM (например в диалоге с админкой) — не перехватываем
+    if await state.get_state() is not None:
+        return
+    action, bet_str = _parse_keyword(txt)
     if action is None:
         return  # не наше слово — игнорируем тихо
 
