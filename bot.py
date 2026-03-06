@@ -1681,99 +1681,255 @@ async def daily_notifier():
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-#  ВЕБ-ПАНЕЛЬ АДМИНА  🌐
-#  Открыть: http://localhost:8080/admin
+#  ВЕБ-ПАНЕЛЬ АДМИНА  🌐  (полное управление)
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-WEB_PASSWORD = "casino_admin_2024"   # ← смените пароль!
+WEB_PASSWORD = "casino_admin_2024"
 WEB_PORT     = int(__import__("os").environ.get("PORT", 8080))
+
+_CSS = """
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; background: #0a0a14; color: #e0e0e0; }
+.sidebar { position: fixed; left: 0; top: 0; width: 220px; height: 100vh; background: #111122; border-right: 1px solid #222240; padding: 20px 0; z-index: 10; overflow-y: auto; }
+.sidebar h2 { color: #ffd700; font-size: 17px; padding: 0 20px 18px; border-bottom: 1px solid #222240; }
+.sidebar a { display: block; padding: 11px 20px; color: #aaa; text-decoration: none; font-size: 14px; }
+.sidebar a:hover,.sidebar a.active { background: #1a1a2e; color: #ffd700; border-left: 3px solid #ffd700; padding-left: 17px; }
+.main { margin-left: 220px; padding: 30px; min-height: 100vh; }
+h1 { color: #ffd700; font-size: 24px; margin-bottom: 6px; }
+.sub { color: #666; font-size: 13px; margin-bottom: 24px; }
+.grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(155px,1fr)); gap: 12px; margin-bottom: 28px; }
+.card { background: #111122; border-radius: 12px; padding: 16px; border: 1px solid #222240; }
+.card .val { font-size: 26px; font-weight: bold; color: #ffd700; margin-top: 6px; }
+.card .lbl { font-size: 12px; color: #777; }
+.section { background: #111122; border-radius: 12px; border: 1px solid #222240; margin-bottom: 22px; overflow: hidden; }
+.sh { padding: 14px 20px; background: #16162a; border-bottom: 1px solid #222240; font-weight: 600; color: #ffd700; font-size: 14px; }
+.sb { padding: 20px; }
+table { width: 100%; border-collapse: collapse; }
+th { padding: 9px 12px; text-align: left; color: #777; font-size: 11px; text-transform: uppercase; letter-spacing: .5px; border-bottom: 1px solid #1e1e30; }
+td { padding: 10px 12px; border-bottom: 1px solid #16162a; font-size: 13px; }
+tr:last-child td { border-bottom: none; }
+tr:hover td { background: #13132a; }
+.bv { display:inline-block; padding:2px 7px; border-radius:8px; font-size:11px; background:#2a2a00; color:#ffd700; }
+input[type=text],input[type=number],input[type=password],select,textarea {
+  background:#0a0a14; border:1px solid #333360; color:#e0e0e0;
+  padding:10px 13px; border-radius:8px; font-size:14px; width:100%; margin-bottom:12px; outline:none; }
+input:focus,select:focus,textarea:focus { border-color:#ffd700; }
+.btn { display:inline-block; padding:10px 22px; border-radius:8px; font-size:14px; font-weight:600; cursor:pointer; border:none; }
+.btn-gold { background:#ffd700; color:#000; } .btn-red { background:#c0392b; color:#fff; }
+.btn-green { background:#27ae60; color:#fff; } .btn-blue { background:#2980b9; color:#fff; }
+.r2 { display:grid; grid-template-columns:1fr 1fr; gap:18px; }
+.alert { padding:11px 15px; border-radius:8px; margin-bottom:16px; font-size:13px; }
+.a-ok { background:#0a2a10; border:1px solid #0a0; color:#0d0; }
+.a-err { background:#2a0a0a; border:1px solid #a00; color:#f88; }
+.cr { display:flex; align-items:center; gap:10px; margin-bottom:10px; }
+.cr label { width:130px; font-size:13px; color:#aaa; }
+.cr input { width:80px; margin:0; }
+.cr span { color:#ffd700; font-size:13px; }
+@media(max-width:680px){.sidebar{display:none}.main{margin-left:0}.r2{grid-template-columns:1fr}}
+"""
+
+def _auth_page(error=""):
+    e = f'<div class="alert a-err">{error}</div>' if error else ""
+    return f"""<!DOCTYPE html><html lang="ru"><head><meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>Casino Admin</title>
+<style>body{{background:#0a0a14;color:#e0e0e0;font-family:sans-serif;display:flex;align-items:center;justify-content:center;height:100vh}}
+.box{{background:#111122;border:1px solid #222240;border-radius:16px;padding:40px;width:340px;text-align:center}}
+h2{{color:#ffd700;margin-bottom:24px}}
+input{{background:#0a0a14;border:1px solid #333360;color:#e0e0e0;padding:12px;border-radius:8px;font-size:15px;width:100%;margin-bottom:14px;outline:none}}
+button{{background:#ffd700;color:#000;padding:12px;border-radius:8px;font-size:15px;font-weight:700;width:100%;border:none;cursor:pointer}}</style></head>
+<body><div class="box"><h2>🔒 Casino Admin</h2>{e}
+<form method="GET" action="/admin"><input type="password" name="pass" placeholder="Пароль" autofocus>
+<button type="submit">Войти</button></form></div></body></html>"""
+
+
+def _page(sidebar_html, body_html):
+    return f"""<!DOCTYPE html><html lang="ru"><head><meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>Casino Admin</title>
+<style>{_CSS}</style></head><body>{sidebar_html}<div class="main">{body_html}</div></body></html>"""
+
+
+def _sidebar(pwd, active):
+    links = [("📊","Статистика","stats"),("👥","Игроки","players"),
+             ("💰","Монеты","coins"),("⭐","VIP","vip"),
+             ("🎲","Шансы игр","chances"),("📢","Рассылка","broadcast")]
+    s = '<div class="sidebar"><h2>🎰 Casino Admin</h2>'
+    for icon, label, tab in links:
+        cls = ' class="active"' if tab == active else ""
+        s += f'<a href="/admin?pass={pwd}&tab={tab}"{cls}>{icon} {label}</a>'
+    return s + "</div>"
 
 
 async def web_admin_handler(request: web.Request):
-    """Простая веб-панель статистики."""
-    # Проверка пароля через query-параметр: ?pass=...
     pwd = request.rel_url.query.get("pass", "")
     if pwd != WEB_PASSWORD:
-        return web.Response(
-            text="<h2>🔒 Введите пароль</h2>"
-                 "<form><input name=\'pass\' type=\'password\' placeholder=\'Пароль\'>"
-                 "<button type=\'submit\'>Войти</button></form>",
-            content_type="text/html"
-        )
+        return web.Response(text=_auth_page("" if not pwd else "❌ Неверный пароль"), content_type="text/html")
 
-    s    = db.get_stats()
-    top  = db.get_top(10)
-    total_games = s["total_wins"] + s["total_losses"]
-    wr   = f"{s['total_wins']/total_games*100:.1f}%" if total_games else "—"
+    tab = request.rel_url.query.get("tab", "stats")
+    msg = request.rel_url.query.get("msg", "")
+    err = request.rel_url.query.get("err", "")
+    s   = db.get_stats()
+    tg  = s["total_wins"] + s["total_losses"]
+    wr  = f"{s['total_wins']/tg*100:.1f}%" if tg else "—"
+    sb  = _sidebar(pwd, tab)
+    alert = (f'<div class="alert a-ok">✅ {msg}</div>' if msg else "") + (f'<div class="alert a-err">❌ {err}</div>' if err else "")
 
-    top_rows = "".join(
-        f"<tr><td>{i+1}</td><td>{r['full_name']}</td>"
-        f"<td>{fmt_coins(r['coins'])}</td><td>{r['level']}</td><td>{r['wins']}</td></tr>"
-        for i, r in enumerate(top)
-    )
+    if tab == "stats":
+        top = db.get_top(10)
+        tr  = "".join(f"<tr><td>{i+1}</td><td>{r['full_name']}</td>"
+                      f"<td>{'<span class=\"bv\">⭐</span>' if db.get_user(r['user_id'])['is_vip'] else '—'}</td>"
+                      f"<td>{fmt_coins(r['coins'])} 🪙</td><td>{r['level']}</td><td>{r['wins']}</td></tr>"
+                      for i, r in enumerate(top))
+        body = f"""<h1>📊 Статистика</h1><p class="sub">🔄 {datetime.now().strftime("%d.%m.%Y %H:%M:%S")} — <a href="/admin?pass={pwd}&tab=stats" style="color:#ffd700">обновить</a></p>
+        <div class="grid">
+          <div class="card"><div class="lbl">👥 Игроков</div><div class="val">{s["total_users"]}</div></div>
+          <div class="card"><div class="lbl">🆕 Новых сегодня</div><div class="val">{s["new_today"]}</div></div>
+          <div class="card"><div class="lbl">⭐ VIP</div><div class="val">{s["vip_count"]}</div></div>
+          <div class="card"><div class="lbl">🪙 Монет</div><div class="val">{fmt_coins(s["total_coins"])}</div></div>
+          <div class="card"><div class="lbl">🎮 Игр сыграно</div><div class="val">{tg}</div></div>
+          <div class="card"><div class="lbl">📈 Winrate</div><div class="val">{wr}</div></div>
+          <div class="card"><div class="lbl">🏆 Побед</div><div class="val">{s["total_wins"]}</div></div>
+          <div class="card"><div class="lbl">💀 Поражений</div><div class="val">{s["total_losses"]}</div></div>
+        </div>
+        <div class="section"><div class="sh">🏆 Топ-10</div><div class="sb" style="padding:0">
+        <table><tr><th>#</th><th>Игрок</th><th>VIP</th><th>Монеты</th><th>Ур.</th><th>Победы</th></tr>{tr}</table>
+        </div></div>"""
 
-    html = f"""<!DOCTYPE html>
-<html lang="ru">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>🎰 Casino Bot — Панель админа</title>
-<style>
-  * {{ box-sizing: border-box; margin: 0; padding: 0; }}
-  body {{ font-family: -apple-system, sans-serif; background: #0f0f1a; color: #e0e0e0; padding: 20px; }}
-  h1 {{ color: #ffd700; margin-bottom: 24px; font-size: 28px; }}
-  h2 {{ color: #aaa; font-size: 16px; margin-bottom: 12px; text-transform: uppercase; letter-spacing: 1px; }}
-  .grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(180px,1fr)); gap: 16px; margin-bottom: 32px; }}
-  .card {{ background: #1a1a2e; border-radius: 12px; padding: 20px; border: 1px solid #2a2a4a; }}
-  .card .val {{ font-size: 32px; font-weight: bold; color: #ffd700; margin-top: 8px; }}
-  .card .lbl {{ font-size: 13px; color: #888; }}
-  table {{ width: 100%; border-collapse: collapse; background: #1a1a2e; border-radius: 12px; overflow: hidden; }}
-  th {{ background: #2a2a4a; padding: 12px; text-align: left; color: #ffd700; font-size: 13px; }}
-  td {{ padding: 10px 12px; border-bottom: 1px solid #2a2a3a; font-size: 14px; }}
-  tr:last-child td {{ border-bottom: none; }}
-  tr:hover td {{ background: #22223a; }}
-  .badge {{ display: inline-block; padding: 2px 8px; border-radius: 20px; font-size: 12px; background: #2a4a2a; color: #4fc; }}
-  .refresh {{ margin-bottom: 20px; color: #888; font-size: 13px; }}
-</style>
-</head>
-<body>
-<h1>🎰 Casino Bot — Админ-панель</h1>
-<p class="refresh">🔄 Обновлено: {datetime.now().strftime("%d.%m.%Y %H:%M:%S")}</p>
+    elif tab == "players":
+        conn  = db.get_conn()
+        users = conn.execute("SELECT * FROM users ORDER BY coins DESC").fetchall()
+        conn.close()
+        tr = "".join(f"<tr><td>{u['user_id']}</td><td>{u['full_name']}</td>"
+                     f"<td>@{u['username'] or '—'}</td><td>{fmt_coins(u['coins'])} 🪙</td>"
+                     f"<td>{u['level']}</td>"
+                     f"<td>{'<span class=\"bv\">⭐ VIP</span>' if u['is_vip'] else '—'}</td>"
+                     f"<td>{u['wins']}/{u['losses']}</td></tr>" for u in users)
+        body = f"""<h1>👥 Игроки</h1><p class="sub">Всего: {s["total_users"]}</p>
+        <div class="section"><div class="sh">Список</div><div class="sb" style="padding:0">
+        <table><tr><th>ID</th><th>Имя</th><th>@username</th><th>Монеты</th><th>Ур.</th><th>VIP</th><th>В/П</th></tr>
+        {tr}</table></div></div>"""
 
-<h2>📊 Общая статистика</h2>
-<div class="grid">
-  <div class="card"><div class="lbl">👥 Всего игроков</div><div class="val">{s["total_users"]}</div></div>
-  <div class="card"><div class="lbl">🆕 Новых сегодня</div><div class="val">{s["new_today"]}</div></div>
-  <div class="card"><div class="lbl">⭐ VIP игроков</div><div class="val">{s["vip_count"]}</div></div>
-  <div class="card"><div class="lbl">🪙 Монет в обороте</div><div class="val">{fmt_coins(s["total_coins"])}</div></div>
-  <div class="card"><div class="lbl">🎮 Игр сыграно</div><div class="val">{total_games}</div></div>
-  <div class="card"><div class="lbl">📈 Winrate игроков</div><div class="val">{wr}</div></div>
-  <div class="card"><div class="lbl">🏆 Всего побед</div><div class="val">{s["total_wins"]}</div></div>
-  <div class="card"><div class="lbl">💀 Всего поражений</div><div class="val">{s["total_losses"]}</div></div>
-</div>
+    elif tab == "coins":
+        body = f"""<h1>💰 Монеты</h1><p class="sub">Выдача и изъятие монет</p>{alert}
+        <div class="r2">
+          <div class="section"><div class="sh">➕ Выдать монеты</div><div class="sb">
+            <form method="GET" action="/admin/action">
+              <input type="hidden" name="pass" value="{pwd}"><input type="hidden" name="action" value="give_coins"><input type="hidden" name="tab" value="coins">
+              <input type="number" name="uid" placeholder="Telegram ID игрока" required>
+              <input type="number" name="amount" placeholder="Количество монет" required>
+              <button class="btn btn-green">➕ Выдать</button></form></div></div>
+          <div class="section"><div class="sh">➖ Забрать монеты</div><div class="sb">
+            <form method="GET" action="/admin/action">
+              <input type="hidden" name="pass" value="{pwd}"><input type="hidden" name="action" value="take_coins"><input type="hidden" name="tab" value="coins">
+              <input type="number" name="uid" placeholder="Telegram ID игрока" required>
+              <input type="number" name="amount" placeholder="Количество монет" required>
+              <button class="btn btn-red">➖ Забрать</button></form></div></div>
+          <div class="section"><div class="sh">🔧 Установить баланс</div><div class="sb">
+            <form method="GET" action="/admin/action">
+              <input type="hidden" name="pass" value="{pwd}"><input type="hidden" name="action" value="set_coins"><input type="hidden" name="tab" value="coins">
+              <input type="number" name="uid" placeholder="Telegram ID игрока" required>
+              <input type="number" name="amount" placeholder="Новый баланс" required>
+              <button class="btn btn-blue">🔧 Установить</button></form></div></div>
+        </div>"""
 
-<h2>🏆 Топ-10 игроков</h2>
-<table>
-<tr><th>#</th><th>Игрок</th><th>💰 Монеты</th><th>Уровень</th><th>🏆 Победы</th></tr>
-{top_rows}
-</table>
-<br>
-<p style="color:#555;font-size:12px">Casino Bot Admin Panel • <a href="?pass={pwd}" style="color:#555">Обновить</a></p>
-</body></html>"""
+    elif tab == "vip":
+        body = f"""<h1>⭐ VIP</h1><p class="sub">Управление VIP статусом</p>{alert}
+        <div class="r2">
+          <div class="section"><div class="sh">⭐ Выдать VIP</div><div class="sb">
+            <form method="GET" action="/admin/action">
+              <input type="hidden" name="pass" value="{pwd}"><input type="hidden" name="action" value="give_vip"><input type="hidden" name="tab" value="vip">
+              <input type="number" name="uid" placeholder="Telegram ID игрока" required>
+              <select name="days"><option value="1">1 день</option><option value="3">3 дня</option>
+              <option value="7" selected>7 дней</option><option value="30">30 дней</option><option value="365">1 год</option></select>
+              <button class="btn btn-gold">⭐ Выдать VIP</button></form></div></div>
+          <div class="section"><div class="sh">❌ Снять VIP</div><div class="sb">
+            <form method="GET" action="/admin/action">
+              <input type="hidden" name="pass" value="{pwd}"><input type="hidden" name="action" value="remove_vip"><input type="hidden" name="tab" value="vip">
+              <input type="number" name="uid" placeholder="Telegram ID игрока" required>
+              <button class="btn btn-red">❌ Снять VIP</button></form></div></div>
+        </div>"""
 
-    return web.Response(text=html, content_type="text/html")
+    elif tab == "chances":
+        names = {"slots":"🎰 Слоты","dice":"🎲 Кости","roulette":"🎡 Рулетка","blackjack":"🃏 Блэкджек","crash":"🚀 Краш"}
+        rows  = "".join(f'<div class="cr"><label>{names[g]}</label>'
+                        f'<input type="number" name="{g}" value="{float(db.get_win_chance(g))*100:.0f}" min="1" max="95">'
+                        f'<span>{float(db.get_win_chance(g))*100:.0f}%</span></div>'
+                        for g in names)
+        body = f"""<h1>🎲 Шансы игр</h1><p class="sub">Вероятность победы игрока (%)</p>{alert}
+        <div class="section"><div class="sh">Настройка</div><div class="sb">
+          <form method="GET" action="/admin/action">
+            <input type="hidden" name="pass" value="{pwd}"><input type="hidden" name="action" value="set_chances"><input type="hidden" name="tab" value="chances">
+            {rows}<button class="btn btn-gold" style="margin-top:6px">💾 Сохранить</button></form></div></div>"""
+
+    elif tab == "broadcast":
+        body = f"""<h1>📢 Рассылка</h1><p class="sub">Сообщение всем игрокам ({s["total_users"]} чел.)</p>{alert}
+        <div class="section"><div class="sh">Написать</div><div class="sb">
+          <form method="GET" action="/admin/action">
+            <input type="hidden" name="pass" value="{pwd}"><input type="hidden" name="action" value="broadcast"><input type="hidden" name="tab" value="broadcast">
+            <textarea name="text" rows="5" placeholder="Текст сообщения... (поддерживается HTML)"></textarea>
+            <button class="btn btn-gold">📢 Разослать всем</button></form></div></div>"""
+    else:
+        body = "<h1>404</h1>"
+
+    return web.Response(text=_page(sb, body), content_type="text/html")
+
+
+async def web_action_handler(request: web.Request):
+    q   = request.rel_url.query
+    pwd = q.get("pass", "")
+    if pwd != WEB_PASSWORD:
+        raise web.HTTPFound("/admin")
+    action = q.get("action", "")
+    tab    = q.get("tab", "stats")
+
+    async def rd(msg="", err=""):
+        raise web.HTTPFound(f"/admin?pass={pwd}&tab={tab}&msg={msg}&err={err}")
+
+    try:
+        if action == "give_coins":
+            db.update_coins(int(q["uid"]), int(q["amount"]))
+            await rd(msg=f"Выдано+{q['amount']}+монет+игроку+{q['uid']}")
+        elif action == "take_coins":
+            db.update_coins(int(q["uid"]), -int(q["amount"]))
+            await rd(msg=f"Изъято+{q['amount']}+монет+у+{q['uid']}")
+        elif action == "set_coins":
+            db.set_coins(int(q["uid"]), int(q["amount"]))
+            await rd(msg=f"Баланс+{q['uid']}+установлен:+{q['amount']}")
+        elif action == "give_vip":
+            db.set_vip(int(q["uid"]), int(q.get("days",7)))
+            try: await bot.send_message(int(q["uid"]), f"⭐ <b>Вам выдан VIP на {q.get('days',7)} дней!</b>", parse_mode="HTML")
+            except: pass
+            await rd(msg=f"VIP+выдан+игроку+{q['uid']}")
+        elif action == "remove_vip":
+            conn = db.get_conn(); conn.execute("UPDATE users SET is_vip=0,vip_until=0 WHERE user_id=?", (int(q["uid"]),)); conn.commit(); conn.close()
+            await rd(msg=f"VIP+снят+у+{q['uid']}")
+        elif action == "set_chances":
+            for g in ["slots","dice","roulette","blackjack","crash"]:
+                db.set_setting(f"win_chance_{g}", str(max(0.01, min(0.95, float(q.get(g,40))/100))))
+            await rd(msg="Шансы+сохранены")
+        elif action == "broadcast":
+            text = q.get("text","").strip()
+            if not text: await rd(err="Пустое+сообщение")
+            uids = db.get_all_user_ids(); ok = 0
+            for uid in uids:
+                try: await bot.send_message(uid, f"📢 <b>Рассылка:</b>\n\n{text}", parse_mode="HTML"); ok += 1; await asyncio.sleep(0.05)
+                except: pass
+            await rd(msg=f"Разослано+{ok}+из+{len(uids)}")
+        else:
+            await rd(err="Неизвестное+действие")
+    except web.HTTPFound: raise
+    except Exception as e: await rd(err=str(e)[:60])
 
 
 async def start_web_panel():
-    """Запускает aiohttp веб-сервер для панели."""
     app = web.Application()
-    app.router.add_get("/admin", web_admin_handler)
-    app.router.add_get("/",      web_admin_handler)  # Railway открывает корень
+    app.router.add_get("/admin",        web_admin_handler)
+    app.router.add_get("/admin/action", web_action_handler)
+    app.router.add_get("/",             web_admin_handler)
     runner = web.AppRunner(app)
     await runner.setup()
-    site = web.TCPSite(runner, "0.0.0.0", WEB_PORT)
-    await site.start()
-    print(f"🌐 Веб-панель: http://localhost:{WEB_PORT}/admin?pass={WEB_PASSWORD}")
+    await web.TCPSite(runner, "0.0.0.0", WEB_PORT).start()
+    print(f"🌐 Веб-панель: http://localhost:{WEB_PORT}?pass={WEB_PASSWORD}")
+
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 #  ЗАПУСК
