@@ -1935,6 +1935,42 @@ async def cmd_notify(message: Message):
     else:
         await message.answer("🔕 Уведомления выключены.")
 
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+#  ПРОМОКОДЫ  🎟
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+@dp.message(Command("promo"))
+@ensure_registered
+async def cmd_promo(message: Message):
+    args = message.text.split()
+    if len(args) < 2:
+        await message.answer(
+            "🎟 <b>Промокод</b>\n\n"
+            "Использование: /promo &lt;КОД&gt;\n"
+            "Пример: /promo CASINO2024",
+            parse_mode="HTML"
+        )
+        return
+    code = args[1].strip().upper()
+    uid  = message.from_user.id
+    res  = db.use_promo(uid, code)
+    if not res["ok"]:
+        await message.answer(f"❌ {res['err']}", parse_mode="HTML")
+        return
+    parts = []
+    if res["coins"] > 0:
+        parts.append(f"💰 +{fmt_coins(res['coins'])} монет")
+    if res["vip_days"] > 0:
+        parts.append(f"⭐ VIP на {res['vip_days']} дней")
+    reward_text = "\n".join(parts) or "🎁 Бонус активирован"
+    user_after  = db.get_user(uid)
+    await message.answer(
+        f"✅ <b>Промокод активирован!</b>\n\n"
+        f"{reward_text}\n\n"
+        f"💼 Баланс: {fmt_coins(user_after['coins'])} 🪙",
+        parse_mode="HTML"
+    )
+
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 #  РУССКИЕ КЛЮЧЕВЫЕ СЛОВА
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -1957,6 +1993,7 @@ _KW = [
     (("помощь","справка","хелп"),                      "help"),
     (("магазин","донат","купить","звёзды"),             "shop"),
     (("меню","казино","игры","привет","старт","хай"),   "menu"),
+    (("промо","промокод","promo","активировать"),        "promo"),
 ]
 
 
@@ -2043,6 +2080,8 @@ async def keyword_handler(message: Message, state: FSMContext):
         await cmd_top(message)
     elif action == "help":
         await cmd_help(message)
+    elif action == "promo":
+        await message.answer("🎟 Введи промокод: /promo &lt;КОД&gt;", parse_mode="HTML")
     elif action == "shop":
         t2 = "⭐ <b>Магазин Stars</b>\n\n"
         for item in config.SHOP_ITEMS.values():
@@ -2299,7 +2338,8 @@ def _page(sidebar_html, body_html):
 def _sidebar(pwd, active):
     links = [("📊","Статистика","stats"),("👥","Игроки","players"),
              ("💰","Монеты","coins"),("⭐","VIP","vip"),
-             ("🎲","Шансы игр","chances"),("📢","Рассылка","broadcast")]
+             ("🎲","Шансы игр","chances"),("📢","Рассылка","broadcast"),
+             ("🎟","Промокоды","promos")]
     s = '<div class="sidebar"><h2>🎰 Casino Admin</h2>'
     for icon, label, tab in links:
         cls = ' class="active"' if tab == active else ""
@@ -2415,6 +2455,72 @@ async def web_admin_handler(request: web.Request):
             <input type="hidden" name="pass" value="{pwd}"><input type="hidden" name="action" value="broadcast"><input type="hidden" name="tab" value="broadcast">
             <textarea name="text" rows="5" placeholder="Текст сообщения... (поддерживается HTML)"></textarea>
             <button class="btn btn-gold">📢 Разослать всем</button></form></div></div>"""
+    elif tab == "promos":
+        promos = db.get_all_promos()
+        now    = int(__import__("time").time())
+        rows   = ""
+        for p in promos:
+            exp   = datetime.fromtimestamp(p["expires_at"]).strftime("%d.%m.%Y") if p["expires_at"] else "∞"
+            bonus = ""
+            if p["coins"]:    bonus += f"💰 {fmt_coins(p['coins'])}"
+            if p["vip_days"]: bonus += f" ⭐{p['vip_days']}д"
+            expired = p["expires_at"] > 0 and p["expires_at"] < now
+            style   = 'style="opacity:.45"' if expired or p["uses"] >= p["max_uses"] else ""
+            code_val = p["code"]
+            uses_val = p["uses"]
+            max_val  = p["max_uses"]
+            note_val = p["note"] or "—"
+            del_url  = f"/admin/action?pass={pwd}&action=del_promo&code={code_val}&tab=promos"
+            rows += (
+                f"<tr {style}>"
+                f"<td><code>{code_val}</code></td>"
+                f"<td>{bonus}</td>"
+                f"<td>{uses_val}/{max_val}</td>"
+                f"<td>{exp}</td>"
+                f"<td>{note_val}</td>"
+                f'<td><a href="{del_url}" style="color:#f44;text-decoration:none">🗑</a></td>'
+                f"</tr>"
+            )
+        body = f"""<h1>🎟 Промокоды</h1><p class="sub">Создание и управление промокодами</p>{alert}
+        <div class="section"><div class="sh">➕ Создать промокод</div><div class="sb">
+          <form method="GET" action="/admin/action">
+            <input type="hidden" name="pass" value="{pwd}">
+            <input type="hidden" name="action" value="create_promo">
+            <input type="hidden" name="tab" value="promos">
+            <div class="r2">
+              <div>
+                <label style="color:#888;font-size:12px;display:block;margin-bottom:4px">КОД (оставь пустым — сгенерируется)</label>
+                <input type="text" name="code" placeholder="CASINO2024" style="text-transform:uppercase">
+              </div>
+              <div>
+                <label style="color:#888;font-size:12px;display:block;margin-bottom:4px">Заметка</label>
+                <input type="text" name="note" placeholder="Для новых игроков">
+              </div>
+              <div>
+                <label style="color:#888;font-size:12px;display:block;margin-bottom:4px">💰 Монет</label>
+                <input type="number" name="coins" value="1000" min="0">
+              </div>
+              <div>
+                <label style="color:#888;font-size:12px;display:block;margin-bottom:4px">⭐ VIP дней</label>
+                <input type="number" name="vip_days" value="0" min="0">
+              </div>
+              <div>
+                <label style="color:#888;font-size:12px;display:block;margin-bottom:4px">Макс. активаций</label>
+                <input type="number" name="max_uses" value="1" min="1">
+              </div>
+              <div>
+                <label style="color:#888;font-size:12px;display:block;margin-bottom:4px">Срок (дней, 0 = бессрочно)</label>
+                <input type="number" name="expires_days" value="0" min="0">
+              </div>
+            </div>
+            <button class="btn btn-gold" style="margin-top:8px">🎟 Создать промокод</button>
+          </form>
+        </div></div>
+        <div class="section"><div class="sh">Все промокоды ({len(promos)})</div>
+        <div class="sb" style="padding:0">
+        <table><tr><th>Код</th><th>Бонус</th><th>Использований</th><th>Истекает</th><th>Заметка</th><th></th></tr>
+        {rows if rows else "<tr><td colspan=6 style=\"text-align:center;color:#555;padding:20px\">Промокодов нет</td></tr>"}
+        </table></div></div>"""
     else:
         body = "<h1>404</h1>"
 
@@ -2462,6 +2568,24 @@ async def web_action_handler(request: web.Request):
                 try: await bot.send_message(uid, f"📢 <b>Рассылка:</b>\n\n{text}", parse_mode="HTML"); ok += 1; await asyncio.sleep(0.05)
                 except: pass
             await rd(msg=f"Разослано+{ok}+из+{len(uids)}")
+        elif action == "create_promo":
+            import random, string
+            code = q.get("code","").strip().upper()
+            if not code:
+                code = "".join(random.choices(string.ascii_uppercase + string.digits, k=8))
+            db.create_promo(
+                code=code,
+                coins=int(q.get("coins",0)),
+                vip_days=int(q.get("vip_days",0)),
+                max_uses=int(q.get("max_uses",1)),
+                expires_days=int(q.get("expires_days",0)),
+                note=q.get("note","")
+            )
+            await rd(msg=f"Промокод+{code}+создан")
+        elif action == "del_promo":
+            code = q.get("code","")
+            db.delete_promo(code)
+            await rd(msg=f"Промокод+{code}+удалён")
         else:
             await rd(err="Неизвестное+действие")
     except web.HTTPFound: raise
@@ -2508,6 +2632,7 @@ async def on_startup():
         BotCommand(command="top",        description="🏆 Топ-10 игроков"),
         BotCommand(command="donate",     description="⭐ Магазин Stars"),
         BotCommand(command="help",       description="❓ Помощь по командам"),
+        BotCommand(command="promo",      description="🎟 Активировать промокод"),
         BotCommand(command="notify",     description="🔔 Уведомления о бонусе"),
     ]
     await bot.set_my_commands(user_commands, scope=BotCommandScopeDefault())
