@@ -1361,132 +1361,93 @@ async def adm_broadcast_send(message: Message, state: FSMContext):
 
 
 
+
+@dp.message(Command("notify"))
+@ensure_registered
+async def cmd_notify(message: Message):
+    """Включить/выключить напоминание о бонусе."""
+    uid  = message.from_user.id
+    cur  = db.get_setting(f"notify_{uid}") or "on"
+    new  = "off" if cur == "on" else "on"
+    db.set_setting(f"notify_{uid}", new)
+    if new == "on":
+        await message.answer("🔔 Уведомления включены — напомню когда бонус готов!")
+    else:
+        await message.answer("🔕 Уведомления выключены.")
+
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 #  РУССКИЕ КЛЮЧЕВЫЕ СЛОВА
-#  Пишешь текст — бот понимает без /команды
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-# Ключевые слова → действие
-# Формат: (слово1, слово2, ...) → "действие"
-KEYWORDS_MAP = {
-    "slots":     ("слоты", "слот", "барабан", "барабаны", "крути", "крутить", "🎰", "однорукий"),
-    "dice":      ("кости", "кубик", "кубики", "бросить", "бросай", "кидай", "кинь"),
-    "roulette":  ("рулетка", "рулетку", "рулет", "колесо", "крутить колесо"),
-    "blackjack": ("блэкджек", "блек джек", "карты", "картишки", "21", "двадцать один", "карта"),
-    "crash":     ("краш", "крэш", "ракета", "ракету", "запуск", "взлёт"),
-    "balance":   ("баланс", "бабки", "монеты", "сколько", "кошелёк", "счёт", "деньги"),
-    "profile":   ("профиль", "стата", "статистика", "инфо", "информация", "обо мне"),
-    "daily":     ("бонус", "ежедневный", "дейли", "награда", "получить бонус", "дай бонус"),
-    "tasks":     ("задания", "задание", "квест", "квесты", "таски", "задачи"),
-    "top":       ("топ", "лидеры", "рейтинг", "лучшие", "рекорды", "первые"),
-    "help":      ("помощь", "помоги", "команды", "что умеешь", "хелп", "справка", "инструкция"),
-    "shop":      ("магазин", "купить", "донат", "пополнить", "звёзды", "вип", "vip", "shop"),
-    "menu":      ("меню", "старт", "начать", "казино", "игры", "главная", "привет", "хай", "йо"),
-}
-
-
-def _parse_keyword(text: str) -> tuple[str | None, str | None]:
-    """
-    Разбирает текст сообщения.
-    Возвращает (действие, ставка_строкой_или_None).
-    Например: "слоты 500" → ("slots", "500")
-              "баланс"    → ("balance", None)
-    """
-    t      = text.lower().strip()
-    parts  = t.split()
-    action = None
-
-    for act, keywords in KEYWORDS_MAP.items():
-        if any(t == kw or t.startswith(kw + " ") for kw in keywords):
-            action = act
-            break
-
-    if action is None:
-        return None, None
-
-    # Ищем число как ставку (первое число в тексте)
-    bet_str = next((p for p in parts if p.isdigit()), None)
-    return action, bet_str
+# Простая таблица: если сообщение НАЧИНАЕТСЯ с ключевого слова → действие
+_KW = [
+    # игры
+    (("слоты","слот","барабан","крути","🎰"),          "slots"),
+    (("кости","кубик","бросай","кидай","кинь"),        "dice"),
+    (("рулетка","рулетку","колесо"),                   "roulette"),
+    (("карты","блэкджек","блек","двадцать один"),       "blackjack"),
+    (("краш","крэш","ракета"),                         "crash"),
+    # меню
+    (("баланс","бабки","счёт","деньги"),               "balance"),
+    (("профиль","стата","статистика","инфо"),           "profile"),
+    (("бонус","дейли","ежедневный","дай бонус"),        "daily"),
+    (("задания","задание","квест","таски"),             "tasks"),
+    (("топ","рейтинг","лидеры"),                       "top"),
+    (("помощь","справка","хелп"),                      "help"),
+    (("магазин","донат","купить","звёзды"),             "shop"),
+    (("меню","казино","игры","привет","старт","хай"),   "menu"),
+]
 
 
 @dp.message(F.text)
 async def keyword_handler(message: Message, state: FSMContext):
-    """Обработчик русских ключевых слов."""
-    txt = message.text or ""
+    txt = (message.text or "").strip()
 
-    # Игнорируем команды /
+    # пропускаем команды
     if txt.startswith("/"):
         return
 
-    # Если юзер в FSM-состоянии (диалог с админкой) — не перехватываем
-    if await state.get_state() is not None:
+    # пропускаем если юзер в FSM диалоге (например ввод для /admin)
+    cur_state = await state.get_state()
+    if cur_state is not None:
         return
 
-    action, bet_str = _parse_keyword(txt)
-    if action is None:
-        return  # не наше слово
+    # определяем действие
+    t      = txt.lower()
+    parts  = t.split()
+    action = None
+    for keywords, act in _KW:
+        for kw in keywords:
+            if t == kw or t.startswith(kw + " "):
+                action = act
+                break
+        if action:
+            break
 
-    # Регистрируем пользователя если нужно
+    if not action:
+        return
+
+    # регистрируем
     u = message.from_user
     db.register_user(u.id, u.username, u.full_name)
+    user = db.get_user(u.id)
 
-    uid  = message.from_user.id
-    user = db.get_user(uid)
+    # ставка — первое число в тексте
+    bet_str = next((p for p in parts if p.isdigit()), None)
 
-    # ── Меню ───────────────────────────────────────────────
-    if action == "menu":
-        bot_info     = await bot.get_me()
-        bot_username = bot_info.username
-        vip          = "⭐ VIP" if user["is_vip"] else ""
-        keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(
-                text="➕ Добавить в группу (с правами админа)",
-                url=(
-                    f"https://t.me/{bot_username}?startgroup=true"
-                    "&admin=change_info+delete_messages+restrict_members"
-                    "+invite_users+pin_messages+manage_video_chats+manage_chat"
-                )
-            )],
-            [
-                InlineKeyboardButton(text="🎮 Быстрая игра", callback_data="quick_play"),
-                InlineKeyboardButton(text="⭐ Магазин",      callback_data="open_shop"),
-            ]
-        ])
-        await message.answer(
-            f"🎰 <b>Casino Bot</b> {vip}\n"
-            f"💰 Баланс: <b>{fmt_coins(user['coins'])} 🪙</b>\n\n"
-            "<b>Ключевые слова для игр:</b>\n"
-            "🎰 <code>слоты 100</code>\n"
-            "🎲 <code>кости 100</code>\n"
-            "🎡 <code>рулетка 100</code>\n"
-            "🃏 <code>карты 100</code>\n"
-            "🚀 <code>краш 100</code>\n\n"
-            "<b>Другие слова:</b>\n"
-            "💰 <code>баланс</code>  👤 <code>профиль</code>\n"
-            "🎁 <code>бонус</code>  📋 <code>задания</code>\n"
-            "🏆 <code>топ</code>  🛒 <code>магазин</code>",
-            parse_mode="HTML",
-            reply_markup=keyboard
-        )
-        return
-
-    # ── Игры — требуют ставку ───────────────────────────────
+    # ── ИГРЫ ──────────────────────────────────────────────
     if action in ("slots", "dice", "roulette", "blackjack", "crash"):
         if not bet_str:
             hints = {
                 "slots":     "слоты 100",
                 "dice":      "кости 100",
-                "roulette":  "рулетка 100  (по умолчанию красное)",
+                "roulette":  "рулетка 100",
                 "blackjack": "карты 100",
                 "crash":     "краш 100",
             }
-            await message.answer(
-                f"💬 Укажи ставку, например: <code>{hints[action]}</code>",
-                parse_mode="HTML"
-            )
+            await message.answer(f"💬 Укажи ставку, например: <code>{hints[action]}</code>", parse_mode="HTML")
             return
 
-        # Подставляем нужный формат и вызываем обработчик игры
         if action == "slots":
             message.text = f"/slots {bet_str}"
             await cmd_slots(message)
@@ -1494,12 +1455,7 @@ async def keyword_handler(message: Message, state: FSMContext):
             message.text = f"/dice {bet_str}"
             await cmd_dice(message)
         elif action == "roulette":
-            # Определяем цвет если написан
-            t = message.text.lower()
-            if any(w in t for w in ("чёрн", "черн", "black")):
-                color = "black"
-            else:
-                color = "red"   # по умолчанию красное
+            color = "black" if any(w in t for w in ("чёрн","черн","black")) else "red"
             message.text = f"/roulette {color} {bet_str}"
             await cmd_roulette(message)
         elif action == "blackjack":
@@ -1510,12 +1466,9 @@ async def keyword_handler(message: Message, state: FSMContext):
             await cmd_crash(message)
         return
 
-    # ── Профиль и остальное ─────────────────────────────────
+    # ── ОСТАЛЬНОЕ ─────────────────────────────────────────
     if action == "balance":
-        await message.answer(
-            f"💰 Твой баланс: <b>{fmt_coins(user['coins'])} 🪙</b>",
-            parse_mode="HTML"
-        )
+        await message.answer(f"💰 Баланс: <b>{fmt_coins(user['coins'])} 🪙</b>", parse_mode="HTML")
     elif action == "profile":
         await cmd_profile(message)
     elif action == "daily":
@@ -1527,12 +1480,33 @@ async def keyword_handler(message: Message, state: FSMContext):
     elif action == "help":
         await cmd_help(message)
     elif action == "shop":
-        text = "⭐ <b>Магазин Telegram Stars</b>\n\nПоддержи казино и получи бонусы!\n\n"
+        t2 = "⭐ <b>Магазин Stars</b>\n\n"
         for item in config.SHOP_ITEMS.values():
-            text += f"  • {item['title']} — ⭐ {item['stars']} Stars\n"
-            text += f"    <i>{item['desc']}</i>\n\n"
-        await message.answer(text, reply_markup=shop_keyboard(), parse_mode="HTML")
-
+            t2 += f"• {item['title']} — ⭐{item['stars']}\n  <i>{item['desc']}</i>\n\n"
+        await message.answer(t2, reply_markup=shop_keyboard(), parse_mode="HTML")
+    elif action == "menu":
+        bot_info = await bot.get_me()
+        vip = "⭐ VIP" if user["is_vip"] else ""
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(
+                text="➕ Добавить в группу (с правами админа)",
+                url=f"https://t.me/{bot_info.username}?startgroup=true&admin=change_info+delete_messages+restrict_members+invite_users+pin_messages+manage_video_chats+manage_chat"
+            )],
+            [InlineKeyboardButton(text="🎮 Быстрая игра", callback_data="quick_play"),
+             InlineKeyboardButton(text="⭐ Магазин",      callback_data="open_shop")]
+        ])
+        await message.answer(
+            f"🎰 <b>Casino Bot</b> {vip}\n"
+            f"💰 Баланс: <b>{fmt_coins(user['coins'])} 🪙</b>\n\n"
+            "<b>Ключевые слова:</b>\n"
+            "🎰 <code>слоты 100</code>  🎲 <code>кости 100</code>\n"
+            "🎡 <code>рулетка 100</code>  🃏 <code>карты 100</code>\n"
+            "🚀 <code>краш 100</code>\n\n"
+            "💰 <code>баланс</code>  👤 <code>профиль</code>\n"
+            "🎁 <code>бонус</code>  📋 <code>задания</code>\n"
+            "🏆 <code>топ</code>  🛒 <code>магазин</code>",
+            parse_mode="HTML", reply_markup=kb
+        )
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -1652,20 +1626,6 @@ async def inline_handler(query: InlineQuery):
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 #  УВЕДОМЛЕНИЯ О БОНУСЕ  🔔
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-@dp.message(Command("notify"))
-@ensure_registered
-async def cmd_notify(message: Message):
-    """Включить/выключить напоминание о бонусе."""
-    uid  = message.from_user.id
-    cur  = db.get_setting(f"notify_{uid}") or "on"
-    new  = "off" if cur == "on" else "on"
-    db.set_setting(f"notify_{uid}", new)
-    if new == "on":
-        await message.answer("🔔 Уведомления включены — напомню когда бонус готов!")
-    else:
-        await message.answer("🔕 Уведомления выключены.")
-
 
 async def daily_notifier():
     """Фоновая задача: каждый час проверяет у кого готов бонус и шлёт уведомление."""
