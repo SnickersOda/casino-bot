@@ -3343,12 +3343,6 @@ async def _finish_tournament():
 #  ЗАПУСК
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 async def on_startup():
-    # Сбрасываем старые соединения — защита от TelegramConflictError
-    try:
-        await bot.delete_webhook(drop_pending_updates=True)
-    except: pass
-    await asyncio.sleep(2)
-
     db.init_db()
     print("✅ База данных инициализирована")
 
