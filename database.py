@@ -122,12 +122,17 @@ def init_db():
             _exec(conn, "INSERT OR IGNORE INTO settings (key,value) VALUES (?,?)",
                   (f"win_chance_{game}", str(chance)))
 
-    # Новые таблицы
-    init_referral(conn)
-    init_deposits(conn)
-    init_tournament(conn)
-
+    # Коммитим основные таблицы
     _commit(conn)
+
+    # Новые таблицы — каждая в своей транзакции
+    init_referral(conn)
+    _commit(conn)
+    init_deposits(conn)
+    _commit(conn)
+    init_tournament(conn)
+    _commit(conn)
+
     _close(conn)
     print(f"✅ БД: {'PostgreSQL' if USE_PG else 'SQLite'}")
     print("✅ База данных инициализирована")
