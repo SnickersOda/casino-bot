@@ -274,8 +274,27 @@ def spin_slots(win_forced: bool) -> tuple[list[list[str]], str]:
 #  КОМАНДЫ — ОСНОВНЫЕ
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 @dp.message(CommandStart())
-@ensure_registered
 async def cmd_start(message: Message):
+    u = message.from_user
+    db.register_user(u.id, u.username, u.full_name)
+    # Реферальная ссылка
+    args = message.text.split()
+    if len(args) > 1 and args[1].startswith("ref"):
+        try:
+            ref_id = int(args[1][3:])
+            if ref_id != u.id:
+                refs = db.get_referrals(ref_id)
+                already = any(r["referee_id"] == u.id for r in refs)
+                if not already:
+                    db.add_referral(ref_id, u.id)
+                    db.set_vip(ref_id, 1)
+                    try:
+                        await bot.send_message(ref_id,
+                            f"👫 <b>Новый реферал!</b>\n"
+                            f"{u.full_name} присоединился по твоей ссылке.\n"
+                            f"⭐ +1 день VIP тебе!", parse_mode="HTML")
+                    except: pass
+        except: pass
     u        = message.from_user
     user     = db.get_user(u.id)
     vip      = "⭐ VIP" if user["is_vip"] else ""
@@ -347,7 +366,7 @@ async def cb_open_shop(callback: CallbackQuery):
     await callback.answer()
 
 
-@dp.message(Command("help"))
+@dp.message(Command("help", ignore_mention=True))
 @ensure_registered
 async def cmd_help(message: Message):
     text = (
@@ -371,7 +390,7 @@ async def cmd_help(message: Message):
     await message.answer(text, parse_mode="HTML")
 
 
-@dp.message(Command("profile"))
+@dp.message(Command("profile", ignore_mention=True))
 @ensure_registered
 async def cmd_profile(message: Message):
     user  = db.get_user(message.from_user.id)
@@ -397,7 +416,7 @@ async def cmd_profile(message: Message):
     await message.answer(text, parse_mode="HTML")
 
 
-@dp.message(Command("balance"))
+@dp.message(Command("balance", ignore_mention=True))
 @ensure_registered
 async def cmd_balance(message: Message):
     user = db.get_user(message.from_user.id)
@@ -407,30 +426,40 @@ async def cmd_balance(message: Message):
     )
 
 
-@dp.message(Command("daily"))
+@dp.message(Command("daily", ignore_mention=True))
 @ensure_registered
 async def cmd_daily(message: Message):
-    result = db.claim_daily(message.from_user.id)
+    uid    = message.from_user.id
+    result = db.claim_daily(uid)
     if result["ok"]:
-        db.update_task_progress(message.from_user.id, "play5")
-        user = db.get_user(message.from_user.id)
+        db.update_task_progress(uid, "play5")
+        # Стрик
+        streak       = db.update_streak(uid)
+        streak_bonus = _streak_bonus(streak)
+        if streak_bonus > 0:
+            db.update_coins(uid, streak_bonus)
+        user = db.get_user(uid)
+        streak_line = f"\n🔥 Стрик: <b>{streak} дней</b>! +{fmt_coins(streak_bonus)} 🪙" if streak_bonus > 0 else f"\n🔥 Стрик: <b>{streak} дней</b>"
         await message.answer(
-            f"🎁 Ежедневный бонус получен!\n"
-            f"+<b>{fmt_coins(result['amount'])} 🪙</b>\n"
-            f"Баланс: {fmt_coins(user['coins'])} 🪙",
+            f"🎁 <b>Ежедневный бонус получен!</b>\n"
+            f"+{fmt_coins(result['amount'])} 🪙"
+            f"{streak_line}\n\n"
+            f"💼 Баланс: {fmt_coins(user['coins'])} 🪙",
             parse_mode="HTML"
         )
     else:
         h = result["seconds_left"] // 3600
         m = (result["seconds_left"] % 3600) // 60
+        streak = db.get_streak(uid)
         await message.answer(
-            f"⏳ Бонус уже получен сегодня.\n"
-            f"Следующий через: <b>{h}ч {m}мин</b>",
+            f"⏳ <b>Бонус уже получен сегодня.</b>\n"
+            f"Следующий через: <b>{h}ч {m}мин</b>\n\n"
+            f"🔥 Текущий стрик: <b>{streak} дней</b>",
             parse_mode="HTML"
         )
 
 
-@dp.message(Command("tasks"))
+@dp.message(Command("tasks", ignore_mention=True))
 @ensure_registered
 async def cmd_tasks(message: Message):
     tasks = db.get_tasks(message.from_user.id)
@@ -450,7 +479,7 @@ async def cmd_tasks(message: Message):
     await message.answer("\n".join(lines), parse_mode="HTML")
 
 
-@dp.message(Command("top"))
+@dp.message(Command("top", ignore_mention=True))
 @ensure_registered
 async def cmd_top(message: Message):
     rows  = db.get_top(10)
@@ -468,7 +497,7 @@ async def cmd_top(message: Message):
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 #  СЛОТЫ  🎰  (с анимацией прокрутки!)
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-@dp.message(Command("slots"))
+@dp.message(Command("slots", ignore_mention=True))
 @ensure_registered
 async def cmd_slots(message: Message):
     args = message.text.split()
@@ -562,7 +591,7 @@ async def cmd_slots(message: Message):
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 #  КОСТИ  🎲
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-@dp.message(Command("dice"))
+@dp.message(Command("dice", ignore_mention=True))
 @ensure_registered
 async def cmd_dice(message: Message):
     args = message.text.split()
@@ -613,7 +642,7 @@ async def cmd_dice(message: Message):
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 #  РУЛЕТКА  🔴⚫
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-@dp.message(Command("roulette"))
+@dp.message(Command("roulette", ignore_mention=True))
 @ensure_registered
 async def cmd_roulette(message: Message):
     args = message.text.split()
@@ -700,7 +729,7 @@ def _bj_val(cards):
 def _bj_hand_str(cards):
     return "  ".join(n for n,_ in cards)
 
-@dp.message(Command("blackjack"))
+@dp.message(Command("blackjack", ignore_mention=True))
 @ensure_registered
 async def cmd_blackjack(message: Message):
     args = message.text.split()
@@ -1085,7 +1114,7 @@ async def _bj_dealer_turn(room: dict):
     bj_rooms.pop(code, None)
 
 
-@dp.message(Command("bjroom"))
+@dp.message(Command("bjroom", ignore_mention=True))
 @ensure_registered
 async def cmd_bjroom(message: Message):
     """Создать комнату мультиплеерного блэкджека."""
@@ -1152,7 +1181,7 @@ async def cmd_bjroom(message: Message):
     )
 
 
-@dp.message(Command("bjjoin"))
+@dp.message(Command("bjjoin", ignore_mention=True))
 @ensure_registered
 async def cmd_bjjoin(message: Message):
     """Войти в комнату по коду."""
@@ -1208,7 +1237,7 @@ async def cmd_bjjoin(message: Message):
         except: pass
 
 
-@dp.message(Command("bjleave"))
+@dp.message(Command("bjleave", ignore_mention=True))
 @ensure_registered
 async def cmd_bjleave(message: Message):
     """Покинуть комнату (только до начала игры)."""
@@ -1364,7 +1393,7 @@ def crash_cashout_kb(uid: int, mult: float) -> InlineKeyboardMarkup:
     ]])
 
 
-@dp.message(Command("crash"))
+@dp.message(Command("crash", ignore_mention=True))
 @ensure_registered
 async def cmd_crash(message: Message):
     uid  = message.from_user.id
@@ -1383,6 +1412,13 @@ async def cmd_crash(message: Message):
     sess = crash_sessions.get(uid)
     if sess and not sess.get("done"):
         await message.answer("⚠️ У тебя уже активная игра! Нажми <b>«ЗАБРАТЬ»</b>.", parse_mode="HTML")
+        return
+
+    # Анти-абуз: кулдаун 15 сек после завершения предыдущей игры
+    last_crash = db.get_setting(f"crash_last_{uid}")
+    if last_crash and int(time.time()) - int(last_crash) < 15:
+        wait = 15 - (int(time.time()) - int(last_crash))
+        await message.answer(f"⏱ Подожди ещё <b>{wait} сек.</b> перед следующей игрой в краш.", parse_mode="HTML")
         return
 
     user = db.get_user(uid)
@@ -1520,6 +1556,7 @@ async def cb_crash_cashout(callback: CallbackQuery):
     db.update_task_progress(uid, "play5")
     db.update_task_progress(uid, "win3")
     db.update_task_progress(uid, "bet1000", bet)
+    db.set_setting(f"crash_last_{uid}", str(int(time.time())))
 
     user_after = db.get_user(uid)
     crash_sessions.pop(uid, None)
@@ -1552,7 +1589,7 @@ def shop_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
-@dp.message(Command("donate"))
+@dp.message(Command("donate", ignore_mention=True))
 @ensure_registered
 async def cmd_donate(message: Message):
     text = (
@@ -1644,7 +1681,7 @@ def test_shop_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
-@dp.message(Command("testdonate"))
+@dp.message(Command("testdonate", ignore_mention=True))
 async def cmd_test_donate(message: Message):
     """Тестовый магазин — только для админов, Stars не списываются."""
     if not is_admin(message.from_user.id):
@@ -1722,7 +1759,7 @@ def admin_keyboard() -> InlineKeyboardMarkup:
     ])
 
 
-@dp.message(Command("admin"))
+@dp.message(Command("admin", ignore_mention=True))
 async def cmd_admin(message: Message):
     if not is_admin(message.from_user.id):
         await message.answer("❌ Нет доступа.")
@@ -1922,7 +1959,7 @@ async def adm_broadcast_send(message: Message, state: FSMContext):
 
 
 
-@dp.message(Command("notify"))
+@dp.message(Command("notify", ignore_mention=True))
 @ensure_registered
 async def cmd_notify(message: Message):
     """Включить/выключить напоминание о бонусе."""
@@ -1939,7 +1976,7 @@ async def cmd_notify(message: Message):
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 #  ПРОМОКОДЫ  🎟
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-@dp.message(Command("promo"))
+@dp.message(Command("promo", ignore_mention=True))
 @ensure_registered
 async def cmd_promo(message: Message):
     args = message.text.split()
@@ -1993,6 +2030,13 @@ _KW = [
     (("помощь","справка","хелп"),                      "help"),
     (("магазин","донат","купить","звёзды"),             "shop"),
     (("меню","казино","игры","привет","старт","хай"),   "menu"),
+    (("мины","mines","бомба","сапёр"),                  "mines"),
+    (("кейс","case","ящик","открыть кейс"),             "case"),
+    (("банк","bank","вклад","депозит"),                 "bank"),
+    (("перевод","отправить","send","передать"),         "send"),
+    (("рефер","реферал","ref","пригласить"),            "ref"),
+    (("турнир","tournament","соревнование"),            "tournament"),
+    (("стрик","streak","серия"),                        "streak"),
     (("промо","промокод","promo","активировать"),        "promo"),
 ]
 
@@ -2023,6 +2067,22 @@ async def keyword_handler(message: Message, state: FSMContext):
             break
 
     if not action:
+        # Авто-проверка: вдруг написали промокод напрямую (4-16 символов, только буквы и цифры)
+        if txt.replace("-","").replace("_","").isalnum() and 4 <= len(txt) <= 16:
+            db.register_user(u.id, u.username, u.full_name)
+            res = db.use_promo(uid, txt.upper())
+            if res["ok"]:
+                parts_r = []
+                if res["coins"]:    parts_r.append(f"💰 +{fmt_coins(res['coins'])} монет")
+                if res["vip_days"]: parts_r.append(f"⭐ VIP на {res['vip_days']} дней")
+                reward_text = "\n".join(parts_r) or "🎁 Бонус активирован"
+                user_after  = db.get_user(uid)
+                await message.answer(
+                    f"✅ <b>Промокод {txt.upper()} активирован!</b>\n\n"
+                    f"{reward_text}\n\n"
+                    f"💼 Баланс: {fmt_coins(user_after['coins'])} 🪙",
+                    parse_mode="HTML"
+                )
         return
 
     # регистрируем
@@ -2081,12 +2141,59 @@ async def keyword_handler(message: Message, state: FSMContext):
     elif action == "help":
         await cmd_help(message)
     elif action == "promo":
-        await message.answer("🎟 Введи промокод: /promo &lt;КОД&gt;", parse_mode="HTML")
+        # Если после слова "промокод" сразу написан код — активируем
+        parts2 = txt.split()
+        code_candidate = next((p.upper() for p in parts2 if p.upper() not in 
+            ("ПРОМО","ПРОМОКОД","PROMO","АКТИВИРОВАТЬ")), None)
+        if code_candidate:
+            res = db.use_promo(uid, code_candidate)
+            if res["ok"]:
+                parts_r = []
+                if res["coins"]:    parts_r.append(f"💰 +{fmt_coins(res['coins'])} монет")
+                if res["vip_days"]: parts_r.append(f"⭐ VIP на {res['vip_days']} дней")
+                reward_text = "\n".join(parts_r) or "🎁 Бонус активирован"
+                user_after  = db.get_user(uid)
+                await message.answer(
+                    f"✅ <b>Промокод активирован!</b>\n\n{reward_text}\n\n"
+                    f"💼 Баланс: {fmt_coins(user_after['coins'])} 🪙",
+                    parse_mode="HTML"
+                )
+            else:
+                await message.answer(f"❌ {res['err']}", parse_mode="HTML")
+        else:
+            await message.answer("🎟 Напиши: <code>промокод КОД</code>\nНапример: <code>промокод TEST</code>", parse_mode="HTML")
     elif action == "shop":
         t2 = "⭐ <b>Магазин Stars</b>\n\n"
         for item in config.SHOP_ITEMS.values():
             t2 += f"• {item['title']} — ⭐{item['stars']}\n  <i>{item['desc']}</i>\n\n"
         await message.answer(t2, reply_markup=shop_keyboard(), parse_mode="HTML")
+    elif action == "mines":
+        if bet_str:
+            message.text = f"/mines {bet_str}"
+        else:
+            message.text = "/mines"
+        await cmd_mines(message)
+        return
+    elif action == "case":
+        message.text = f"/case {bet_str or 'bronze'}"
+        await cmd_case(message)
+        return
+    elif action == "bank":
+        message.text = "/bank"
+        await cmd_bank(message)
+        return
+    elif action == "send":
+        await message.answer("💸 Используй: /send @username сумма", parse_mode="HTML")
+        return
+    elif action == "ref":
+        await cmd_ref(message)
+        return
+    elif action == "tournament":
+        await cmd_tournament(message)
+        return
+    elif action == "streak":
+        await cmd_streak(message)
+        return
     elif action == "menu":
         bot_info = await bot.get_me()
         vip = "⭐ VIP" if user["is_vip"] else ""
@@ -2603,6 +2710,635 @@ async def start_web_panel():
     print(f"🌐 Веб-панель: http://localhost:{WEB_PORT}?pass={WEB_PASSWORD}")
 
 
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+#  РЕФЕРАЛЫ  👫
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+@dp.message(Command("ref", ignore_mention=True))
+@ensure_registered
+async def cmd_ref(message: Message):
+    uid      = message.from_user.id
+    bot_info = await bot.get_me()
+    link     = f"https://t.me/{bot_info.username}?start=ref{uid}"
+    refs     = db.get_referrals(uid)
+    total    = len(refs)
+    earned   = total * 500
+
+    await message.answer(
+        f"👫 <b>Реферальная программа</b>\n\n"
+        f"Приглашай друзей — получай <b>⭐ 1 день VIP</b> за каждого!\n\n"
+        f"🔗 Твоя ссылка:\n<code>{link}</code>\n\n"
+        f"👥 Приглашено: <b>{total}</b> игроков\n"
+        f"⭐ VIP дней получено: <b>{total}</b>",
+        parse_mode="HTML"
+    )
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+#  ПЕРЕВОД МОНЕТ  💸
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+@dp.message(Command("send", ignore_mention=True))
+@ensure_registered
+async def cmd_send(message: Message):
+    args = message.text.split()
+    uid  = message.from_user.id
+
+    if len(args) < 3:
+        await message.answer(
+            "💸 <b>Перевод монет</b>\n\n"
+            "Использование: /send &lt;@username или ID&gt; &lt;сумма&gt;\n"
+            "Пример: /send @friend 1000\n\n"
+            "Комиссия: <b>5%</b>",
+            parse_mode="HTML"
+        )
+        return
+
+    target_str = args[1].lstrip("@")
+    amount_str = args[2]
+
+    try:
+        amount = int(amount_str)
+    except ValueError:
+        await message.answer("❌ Сумма должна быть числом."); return
+
+    if amount < 100:
+        await message.answer("❌ Минимальный перевод: 100 🪙"); return
+
+    sender = db.get_user(uid)
+    commission = max(50, int(amount * 0.05))
+    total_cost = amount + commission
+
+    if sender["coins"] < total_cost:
+        await message.answer(
+            f"❌ Недостаточно монет.\n"
+            f"Нужно: {fmt_coins(total_cost)} 🪙 (включая комиссию {fmt_coins(commission)} 🪙)\n"
+            f"У тебя: {fmt_coins(sender['coins'])} 🪙"
+        ); return
+
+    # Ищем получателя
+    target = db.find_user_by_username(target_str) or db.get_user_by_id_safe(target_str)
+    if not target:
+        await message.answer(f"❌ Игрок @{target_str} не найден. Он должен быть зарегистрирован в боте."); return
+
+    target_uid = target["user_id"]
+    if target_uid == uid:
+        await message.answer("❌ Нельзя переводить самому себе."); return
+
+    db.update_coins(uid, -total_cost)
+    db.update_coins(target_uid, amount)
+    # Комиссия идёт первому админу
+    if config.ADMIN_IDS:
+        db.update_coins(config.ADMIN_IDS[0], commission)
+
+    sender_after = db.get_user(uid)
+    await message.answer(
+        f"✅ <b>Перевод выполнен!</b>\n\n"
+        f"Получатель: <b>{target['full_name']}</b>\n"
+        f"Сумма: <b>{fmt_coins(amount)} 🪙</b>\n"
+        f"Комиссия: <b>{fmt_coins(commission)} 🪙</b>\n\n"
+        f"💼 Твой баланс: {fmt_coins(sender_after['coins'])} 🪙",
+        parse_mode="HTML"
+    )
+    try:
+        await bot.send_message(
+            target_uid,
+            f"💸 <b>Входящий перевод!</b>\n\n"
+            f"От: <b>{message.from_user.full_name}</b>\n"
+            f"Сумма: <b>{fmt_coins(amount)} 🪙</b>",
+            parse_mode="HTML"
+        )
+    except: pass
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+#  БАНК (ВКЛАД)  🏦
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+@dp.message(Command("bank", ignore_mention=True))
+@ensure_registered
+async def cmd_bank(message: Message):
+    args = message.text.split()
+    uid  = message.from_user.id
+
+    deposit_info = db.get_deposit(uid)
+    user         = db.get_user(uid)
+
+    if len(args) == 1:
+        # Показать состояние вклада
+        if deposit_info and deposit_info["amount"] > 0:
+            deposited = deposit_info["amount"]
+            days_left = max(0, deposit_info["unlock_at"] - int(time.time()))
+            hours_left = days_left // 3600
+            pct   = deposit_info["rate"]
+            payout = int(deposited * (1 + pct))
+            await message.answer(
+                f"🏦 <b>Твой вклад</b>\n\n"
+                f"💰 Вложено: <b>{fmt_coins(deposited)} 🪙</b>\n"
+                f"📈 Процент: <b>{int(pct*100)}%</b>\n"
+                f"💎 Получишь: <b>{fmt_coins(payout)} 🪙</b>\n"
+                f"⏱ Осталось: <b>{hours_left} ч.</b>\n\n"
+                f"<i>/bank забрать — снять вклад досрочно (без процентов)</i>",
+                parse_mode="HTML"
+            )
+        else:
+            await message.answer(
+                f"🏦 <b>Банк — вклад под проценты</b>\n\n"
+                f"Положи монеты на хранение и получи прибыль!\n\n"
+                f"📅 <b>Тарифы:</b>\n"
+                f"• 1 день  → +5%\n"
+                f"• 3 дня   → +15%\n"
+                f"• 7 дней  → +40%\n\n"
+                f"💼 Баланс: {fmt_coins(user['coins'])} 🪙\n\n"
+                f"<b>Использование:</b>\n"
+                f"/bank 1000 1  — вложить 1000 на 1 день\n"
+                f"/bank 5000 7  — вложить 5000 на 7 дней",
+                parse_mode="HTML"
+            )
+        return
+
+    if args[1] == "забрать":
+        if not deposit_info or deposit_info["amount"] == 0:
+            await message.answer("❌ У тебя нет активного вклада."); return
+        # Досрочное снятие — только сумма без процентов
+        db.update_coins(uid, deposit_info["amount"])
+        db.clear_deposit(uid)
+        await message.answer(
+            f"🏦 Вклад снят досрочно.\n"
+            f"Возвращено: {fmt_coins(deposit_info['amount'])} 🪙 (без процентов)",
+            parse_mode="HTML"
+        )
+        return
+
+    if len(args) < 3:
+        await message.answer("❌ Укажи сумму и срок. Пример: /bank 1000 3"); return
+
+    try:
+        amount = int(args[1])
+        days   = int(args[2])
+    except ValueError:
+        await message.answer("❌ Неверный формат. Пример: /bank 1000 3"); return
+
+    if days not in (1, 3, 7):
+        await message.answer("❌ Срок: 1, 3 или 7 дней."); return
+    if amount < 100:
+        await message.answer("❌ Минимальный вклад: 100 🪙"); return
+    if user["coins"] < amount:
+        await message.answer(f"❌ Недостаточно монет. У тебя: {fmt_coins(user['coins'])} 🪙"); return
+    if deposit_info and deposit_info["amount"] > 0:
+        await message.answer("❌ У тебя уже есть активный вклад. Сначала забери его: /bank забрать"); return
+
+    rates = {1: 0.05, 3: 0.15, 7: 0.40}
+    rate  = rates[days]
+    db.update_coins(uid, -amount)
+    db.create_deposit(uid, amount, rate, days)
+
+    payout = int(amount * (1 + rate))
+    await message.answer(
+        f"🏦 <b>Вклад открыт!</b>\n\n"
+        f"💰 Вложено: {fmt_coins(amount)} 🪙\n"
+        f"📈 Процент: {int(rate*100)}% за {days} дн.\n"
+        f"💎 Получишь: <b>{fmt_coins(payout)} 🪙</b>\n\n"
+        f"<i>Заберёшь через {days} дн. командой /bank</i>",
+        parse_mode="HTML"
+    )
+
+
+# Фоновая задача — выплата вкладов
+async def bank_checker():
+    while True:
+        await asyncio.sleep(300)  # каждые 5 минут
+        try:
+            payouts = db.get_ready_deposits()
+            for dep in payouts:
+                uid    = dep["user_id"]
+                payout = int(dep["amount"] * (1 + dep["rate"]))
+                db.update_coins(uid, payout)
+                db.clear_deposit(uid)
+                try:
+                    await bot.send_message(
+                        uid,
+                        f"🏦 <b>Вклад созрел!</b>\n\n"
+                        f"💎 Начислено: <b>{fmt_coins(payout)} 🪙</b>\n"
+                        f"(вклад {fmt_coins(dep['amount'])} + {int(dep['rate']*100)}%)",
+                        parse_mode="HTML"
+                    )
+                except: pass
+        except: pass
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+#  КЕЙСЫ  🎁
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+CASES = {
+    "bronze": {
+        "name": "🥉 Бронзовый кейс", "price": 2500,
+        # мин 500, макс 25 000 | avg ~3 500
+        "prizes": [(500,20),(1500,25),(3000,25),(7000,16),(15000,10),(25000,4)],
+    },
+    "silver": {
+        "name": "🥈 Серебряный кейс", "price": 10000,
+        # мин 3 000, макс 150 000 | avg ~16 000
+        "prizes": [(3000,18),(8000,24),(20000,26),(50000,18),(100000,10),(150000,4)],
+    },
+    "gold": {
+        "name": "🥇 Золотой кейс", "price": 50000,
+        # мин 20 000, макс 2 000 000 | avg ~100 000
+        "prizes": [(20000,15),(60000,24),(150000,26),(400000,18),(900000,12),(2000000,5)],
+    },
+    "diamond": {
+        "name": "💎 Алмазный кейс", "price": 250000,
+        # мин 100 000, макс 10 000 000 | avg ~600 000
+        "prizes": [(100000,12),(300000,22),(750000,26),(2000000,20),(5000000,14),(10000000,6)],
+    },
+}
+
+
+def _open_case(case_key: str) -> int:
+    prizes = CASES[case_key]["prizes"]
+    total  = sum(w for _, w in prizes)
+    r = random.randint(1, total)
+    cumul = 0
+    for amount, weight in prizes:
+        cumul += weight
+        if r <= cumul:
+            return amount
+    return prizes[0][0]
+
+
+@dp.message(Command("case", ignore_mention=True))
+@ensure_registered
+async def cmd_case(message: Message):
+    args = message.text.split()
+    uid  = message.from_user.id
+    user = db.get_user(uid)
+
+    if len(args) < 2:
+        lines = ["🎁 <b>Кейсы</b>\n"]
+        for key, c in CASES.items():
+            mn = min(p for p,_ in c["prizes"])
+            mx = max(p for p,_ in c["prizes"])
+            lines.append(f"{c['name']} — {fmt_coins(c['price'])} 🪙\n  Призы: {fmt_coins(mn)}–{fmt_coins(mx)} 🪙")
+        lines.append(f"\n💼 Баланс: {fmt_coins(user['coins'])} 🪙")
+        lines.append("\n<b>Использование:</b> /case bronze | silver | gold")
+        await message.answer("\n".join(lines), parse_mode="HTML"); return
+
+    key = args[1].lower()
+    if key not in CASES:
+        await message.answer("❌ Кейс не найден. Доступны: bronze, silver, gold"); return
+
+    case  = CASES[key]
+    price = case["price"]
+    if user["coins"] < price:
+        await message.answer(f"❌ Не хватает монет. Нужно {fmt_coins(price)} 🪙"); return
+
+    db.update_coins(uid, -price)
+
+    # Анимация открытия
+    msg = await message.answer(f"🎁 Открываем {case['name']}...\n\n🔒 🔒 🔒")
+    await asyncio.sleep(0.8)
+    await msg.edit_text(f"🎁 Открываем {case['name']}...\n\n🔓 🔒 🔒")
+    await asyncio.sleep(0.8)
+    await msg.edit_text(f"🎁 Открываем {case['name']}...\n\n🔓 🔓 🔒")
+    await asyncio.sleep(0.8)
+
+    prize = _open_case(key)
+    db.update_coins(uid, prize)
+    db.add_xp(uid, 30)
+    user_after = db.get_user(uid)
+
+    profit = prize - price
+    emoji  = "🤑" if profit > 0 else "😔"
+
+    await msg.edit_text(
+        f"🎁 <b>{case['name']} открыт!</b>\n\n"
+        f"🔓 🔓 🔓\n\n"
+        f"{emoji} Приз: <b>{fmt_coins(prize)} 🪙</b>\n"
+        f"{'📈' if profit > 0 else '📉'} {'Прибыль' if profit > 0 else 'Убыток'}: "
+        f"{'+'if profit>0 else ''}{fmt_coins(profit)} 🪙\n\n"
+        f"💼 Баланс: {fmt_coins(user_after['coins'])} 🪙",
+        parse_mode="HTML"
+    )
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+#  СТРИКИ  🔥
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# Встроены в cmd_daily — при получении бонуса подсчитываем стрик
+# Отдельная команда /streak для просмотра
+
+@dp.message(Command("streak", ignore_mention=True))
+@ensure_registered
+async def cmd_streak(message: Message):
+    uid    = message.from_user.id
+    streak = db.get_streak(uid)
+    bonus  = _streak_bonus(streak)
+    next_b = _streak_bonus(streak + 1)
+
+    bars = min(streak, 30)
+    bar  = "🔥" * bars + "▱" * (30 - bars)
+
+    milestones = "\n<b>Уровни стрика:</b>\n2д → +500 🪙\n3д → +2 000 🪙\n7д → +5 000 🪙\n14д → +10 000 🪙\n30д → +25 000 🪙\n60д → +50 000 🪙\n100д → +100 000 🪙"
+
+    await message.answer(
+        f"🔥 <b>Стрик ежедневных бонусов</b>\n\n"
+        f"{bar}\n\n"
+        f"📅 Текущий стрик: <b>{streak} дней</b>\n"
+        f"💰 Бонус сегодня: <b>+{fmt_coins(bonus)} 🪙</b>\n"
+        f"⬆️ Следующий: <b>+{fmt_coins(next_b)} 🪙</b> ({streak+1} дней)"
+        f"{milestones}",
+        parse_mode="HTML"
+    )
+
+
+def _streak_bonus(streak: int) -> int:
+    """Бонус стрика в монетах (начисляется поверх обычного дейли)."""
+    if streak >= 100: return 100000
+    if streak >= 60:  return 50000
+    if streak >= 30:  return 25000
+    if streak >= 14:  return 10000
+    if streak >= 7:   return 5000
+    if streak >= 3:   return 2000
+    if streak >= 2:   return 500
+    return 0
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+#  ИГРА МИНЫ  💣
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+mines_sessions: dict[int, dict] = {}
+
+MINES_GRID = 25  # 5x5
+
+def _mines_multiplier(opened: int, mines: int) -> float:
+    """Честный мультипликатор на основе теории вероятности."""
+    safe  = MINES_GRID - mines
+    mult  = 1.0
+    for i in range(opened):
+        mult *= (MINES_GRID - i) / (safe - i)
+    return round(mult * 0.97, 2)  # 3% комиссия казино
+
+
+def _mines_kb(uid: int, revealed: set, mine_positions: set, exploded=False, cashed_out=False) -> InlineKeyboardMarkup:
+    rows = []
+    for row in range(5):
+        btns = []
+        for col in range(5):
+            idx = row * 5 + col
+            if idx in revealed:
+                if idx in mine_positions:
+                    btns.append(InlineKeyboardButton(text="💣", callback_data="mines_noop"))
+                else:
+                    btns.append(InlineKeyboardButton(text="💎", callback_data="mines_noop"))
+            elif exploded or cashed_out:
+                if idx in mine_positions:
+                    btns.append(InlineKeyboardButton(text="💣", callback_data="mines_noop"))
+                else:
+                    btns.append(InlineKeyboardButton(text="✅", callback_data="mines_noop"))
+            else:
+                btns.append(InlineKeyboardButton(text="⬜", callback_data=f"mines_open_{uid}_{idx}"))
+        rows.append(btns)
+    if not exploded and not cashed_out and revealed:
+        rows.append([InlineKeyboardButton(
+            text=f"💰 Забрать x{_mines_multiplier(len(revealed), mines_sessions[uid]['mines'])}",
+            callback_data=f"mines_cashout_{uid}"
+        )])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+@dp.message(Command("mines", ignore_mention=True))
+@ensure_registered
+async def cmd_mines(message: Message):
+    args = message.text.split()
+    uid  = message.from_user.id
+
+    if uid in mines_sessions and not mines_sessions[uid].get("done"):
+        await message.answer("⚠️ У тебя уже есть активная игра в мины! Заверши её сначала.")
+        return
+
+    if len(args) < 2:
+        await message.answer(
+            "💣 <b>Мины</b>\n\n"
+            "Открывай клетки — избегай мин!\n"
+            "Каждая открытая клетка увеличивает выигрыш.\n\n"
+            "Использование: /mines &lt;ставка&gt; [мины 1-24]\n"
+            "Пример: /mines 1000 5\n\n"
+            "По умолчанию 3 мины. Больше мин = выше множитель!",
+            parse_mode="HTML"
+        ); return
+
+    user   = db.get_user(uid)
+    bet, err = validate_bet(user, args[1])
+    if err:
+        await message.answer(err); return
+
+    mines_count = 3
+    if len(args) >= 3:
+        try:
+            mines_count = max(1, min(24, int(args[2])))
+        except: pass
+
+    db.update_coins(uid, -bet)
+
+    # Расставляем мины
+    mine_pos = set(random.sample(range(MINES_GRID), mines_count))
+
+    mines_sessions[uid] = {
+        "bet":      bet,
+        "mines":    mines_count,
+        "mine_pos": mine_pos,
+        "revealed": set(),
+        "done":     False,
+    }
+
+    kb  = _mines_kb(uid, set(), mine_pos)
+    msg = await message.answer(
+        f"💣 <b>Мины</b> — {mines_count} мин на поле 5×5\n"
+        f"💸 Ставка: {fmt_coins(bet)} 🪙\n"
+        f"📈 Множитель: x1.00\n\n"
+        f"Открывай клетки ⬜ — избегай 💣!",
+        parse_mode="HTML",
+        reply_markup=kb
+    )
+    mines_sessions[uid]["msg"] = msg
+
+
+@dp.callback_query(F.data.startswith("mines_open_"))
+async def cb_mines_open(callback: CallbackQuery):
+    parts = callback.data.split("_")
+    uid   = int(parts[2])
+    idx   = int(parts[3])
+
+    if callback.from_user.id != uid:
+        await callback.answer("❌ Это не твоя игра!", show_alert=True); return
+
+    sess = mines_sessions.get(uid)
+    if not sess or sess["done"]:
+        await callback.answer("Игра завершена!"); return
+
+    sess["revealed"].add(idx)
+
+    if idx in sess["mine_pos"]:
+        # Взрыв!
+        sess["done"] = True
+        db.record_game(uid, False, sess["bet"])
+        db.add_xp(uid, 5)
+        kb = _mines_kb(uid, sess["revealed"], sess["mine_pos"], exploded=True)
+        user_after = db.get_user(uid)
+        mines_sessions.pop(uid, None)
+        await callback.answer("💥 МИНА!", show_alert=False)
+        try:
+            await callback.message.edit_text(
+                f"💥 <b>МИНА! Взрыв!</b>\n\n"
+                f"Потерял: -{fmt_coins(sess['bet'])} 🪙\n"
+                f"💼 Баланс: {fmt_coins(user_after['coins'])} 🪙",
+                parse_mode="HTML",
+                reply_markup=kb
+            )
+        except: pass
+    else:
+        opened = len(sess["revealed"])
+        mult   = _mines_multiplier(opened, sess["mines"])
+        pot    = int(sess["bet"] * mult)
+        kb     = _mines_kb(uid, sess["revealed"], sess["mine_pos"])
+        await callback.answer(f"💎 Безопасно! x{mult}")
+        try:
+            await callback.message.edit_text(
+                f"💣 <b>Мины</b> — открыто {opened} клеток\n"
+                f"💸 Ставка: {fmt_coins(sess['bet'])} 🪙\n"
+                f"📈 Множитель: <b>x{mult}</b>\n"
+                f"💰 Сейчас получишь: <b>{fmt_coins(pot)} 🪙</b>\n\n"
+                f"Продолжай или забирай!",
+                parse_mode="HTML",
+                reply_markup=kb
+            )
+        except: pass
+
+
+@dp.callback_query(F.data.startswith("mines_cashout_"))
+async def cb_mines_cashout(callback: CallbackQuery):
+    uid  = int(callback.data.replace("mines_cashout_", ""))
+    if callback.from_user.id != uid:
+        await callback.answer("❌ Не твоя игра!", show_alert=True); return
+
+    sess = mines_sessions.get(uid)
+    if not sess or sess["done"]:
+        await callback.answer("Игра уже завершена!"); return
+
+    opened = len(sess["revealed"])
+    if opened == 0:
+        await callback.answer("Сначала открой хотя бы одну клетку!", show_alert=True); return
+
+    sess["done"] = True
+    mult   = _mines_multiplier(opened, sess["mines"])
+    payout = int(sess["bet"] * mult)
+
+    db.update_coins(uid, payout)
+    db.record_game(uid, True, sess["bet"])
+    db.add_xp(uid, sess["bet"] // 10 + 20)
+    db.update_task_progress(uid, "win3")
+
+    user_after = db.get_user(uid)
+    kb = _mines_kb(uid, sess["revealed"], sess["mine_pos"], cashed_out=True)
+    mines_sessions.pop(uid, None)
+
+    await callback.answer(f"✅ Забрал x{mult}!", show_alert=False)
+    try:
+        await callback.message.edit_text(
+            f"✅ <b>Забрал выигрыш!</b>\n\n"
+            f"💎 Открыто клеток: {opened}\n"
+            f"📈 Множитель: x{mult}\n"
+            f"💰 Выплата: {fmt_coins(payout)} 🪙  (+{fmt_coins(payout-sess['bet'])})\n\n"
+            f"💼 Баланс: {fmt_coins(user_after['coins'])} 🪙",
+            parse_mode="HTML",
+            reply_markup=kb
+        )
+    except: pass
+
+
+@dp.callback_query(F.data == "mines_noop")
+async def cb_mines_noop(callback: CallbackQuery):
+    await callback.answer()
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+#  ТУРНИР  🏆
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+@dp.message(Command("tournament", ignore_mention=True))
+@ensure_registered
+async def cmd_tournament(message: Message):
+    uid    = message.from_user.id
+    top    = db.get_tournament_top(10)
+    my_pos = db.get_tournament_position(uid)
+    my_pts = db.get_tournament_points(uid)
+
+    prizes = {1: 50000, 2: 25000, 3: 10000, 4: 5000, 5: 2500}
+    ends   = db.get_tournament_end()
+    now    = int(time.time())
+    left   = max(0, ends - now)
+    d, rem = divmod(left, 86400)
+    h, _   = divmod(rem, 3600)
+
+    lines = [
+        f"🏆 <b>Еженедельный турнир</b>\n",
+        f"⏱ До конца: <b>{d}д {h}ч</b>\n",
+        f"{'─'*24}\n",
+        f"<b>Призы:</b>\n",
+        f"🥇 1 место — {fmt_coins(prizes[1])} 🪙\n",
+        f"🥈 2 место — {fmt_coins(prizes[2])} 🪙\n",
+        f"🥉 3 место — {fmt_coins(prizes[3])} 🪙\n",
+        f"4-5 место — {fmt_coins(prizes[4])}-{fmt_coins(prizes[5])} 🪙\n",
+        f"{'─'*24}\n",
+        f"<b>Топ-10:</b>\n",
+    ]
+    medals = ["🥇","🥈","🥉","4️⃣","5️⃣","6️⃣","7️⃣","8️⃣","9️⃣","🔟"]
+    for i, row in enumerate(top):
+        me = " ← ты" if row["user_id"] == uid else ""
+        lines.append(f"{medals[i]} {row['full_name']}: {fmt_coins(row['points'])} очков{me}\n")
+
+    if my_pos and my_pos > 10:
+        lines.append(f"\n👤 Твоя позиция: #{my_pos} ({fmt_coins(my_pts)} очков)")
+    elif not top:
+        lines.append("\n<i>Ещё никто не участвует. Будь первым!</i>")
+
+    lines.append("\n<i>Очки начисляются за выигрыши. 1 монета выигрыша = 1 очко.</i>")
+
+    await message.answer("".join(lines), parse_mode="HTML")
+
+
+# Фоновая задача — раз в неделю подводить итоги турнира
+async def tournament_checker():
+    while True:
+        await asyncio.sleep(3600)  # каждый час проверяем
+        try:
+            ends = db.get_tournament_end()
+            if int(time.time()) >= ends:
+                await _finish_tournament()
+        except: pass
+
+
+async def _finish_tournament():
+    top = db.get_tournament_top(5)
+    prizes = {0: 50000, 1: 25000, 2: 10000, 3: 5000, 4: 2500}
+    for i, row in enumerate(top):
+        prize = prizes.get(i, 0)
+        if prize:
+            db.update_coins(row["user_id"], prize)
+            try:
+                await bot.send_message(
+                    row["user_id"],
+                    f"🏆 <b>Турнир завершён!</b>\n\n"
+                    f"Ты занял <b>#{i+1} место</b>!\n"
+                    f"Приз: <b>{fmt_coins(prize)} 🪙</b>",
+                    parse_mode="HTML"
+                )
+            except: pass
+    db.reset_tournament()
+
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 #  ЗАПУСК
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -2633,6 +3369,13 @@ async def on_startup():
         BotCommand(command="donate",     description="⭐ Магазин Stars"),
         BotCommand(command="help",       description="❓ Помощь по командам"),
         BotCommand(command="promo",      description="🎟 Активировать промокод"),
+        BotCommand(command="ref",        description="👫 Реферальная программа"),
+        BotCommand(command="send",       description="💸 Перевести монеты игроку"),
+        BotCommand(command="bank",       description="🏦 Вклад под проценты"),
+        BotCommand(command="case",       description="🎁 Открыть кейс"),
+        BotCommand(command="mines",      description="💣 Игра Мины"),
+        BotCommand(command="streak",     description="🔥 Мой стрик"),
+        BotCommand(command="tournament", description="🏆 Еженедельный турнир"),
         BotCommand(command="notify",     description="🔔 Уведомления о бонусе"),
     ]
     await bot.set_my_commands(user_commands, scope=BotCommandScopeDefault())
@@ -2665,6 +3408,8 @@ async def main():
     await on_startup()
     asyncio.create_task(vip_checker())
     asyncio.create_task(daily_notifier())
+    asyncio.create_task(bank_checker())
+    asyncio.create_task(tournament_checker())
     await start_web_panel()
     await dp.start_polling(bot, skip_updates=True)
 
