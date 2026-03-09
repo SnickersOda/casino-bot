@@ -1773,13 +1773,18 @@ async def cb_test_buy(callback: CallbackQuery):
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 def admin_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="💰 Выдать монеты",   callback_data="adm_give")],
-        [InlineKeyboardButton(text="💸 Забрать монеты",  callback_data="adm_take")],
-        [InlineKeyboardButton(text="⭐ Выдать VIP",      callback_data="adm_vip")],
-        [InlineKeyboardButton(text="📊 Статистика бота", callback_data="adm_stats")],
-        [InlineKeyboardButton(text="🎲 Изменить шанс",   callback_data="adm_chance")],
-        [InlineKeyboardButton(text="📢 Рассылка",        callback_data="adm_broadcast")],
-        [InlineKeyboardButton(text="🏆 Топ-5 игроков",  callback_data="adm_top")],
+        [InlineKeyboardButton(text="📊 Статистика",      callback_data="adm_stats"),
+         InlineKeyboardButton(text="🏆 Топ-5",           callback_data="adm_top")],
+        [InlineKeyboardButton(text="💰 Выдать монеты",   callback_data="adm_give"),
+         InlineKeyboardButton(text="💸 Забрать монеты",  callback_data="adm_take")],
+        [InlineKeyboardButton(text="⭐ Выдать VIP",      callback_data="adm_vip"),
+         InlineKeyboardButton(text="🚫 Забрать VIP",     callback_data="adm_delvip")],
+        [InlineKeyboardButton(text="🔍 Найти игрока",    callback_data="adm_search"),
+         InlineKeyboardButton(text="💬 Написать игроку", callback_data="adm_msg")],
+        [InlineKeyboardButton(text="🎁 Подарить монеты", callback_data="adm_gift"),
+         InlineKeyboardButton(text="🎟 Промокод",        callback_data="adm_promo")],
+        [InlineKeyboardButton(text="🎲 Изменить шанс",   callback_data="adm_chance"),
+         InlineKeyboardButton(text="📢 Рассылка",        callback_data="adm_broadcast")],
     ])
 
 
@@ -1798,17 +1803,25 @@ async def adm_stats(callback: CallbackQuery):
     s = db.get_stats()
     total_games = s["total_wins"] + s["total_losses"]
     wr = f"{s['total_wins']/total_games*100:.1f}%" if total_games else "—"
-    await callback.message.answer(
+    bank   = db.get_bank_total()
+    refs   = db.get_referral_count()
+    promos = db.get_promo_total_uses()
+    tu = s["total_users"]; nt = s["new_today"]; vc = s["vip_count"]
+    tc = fmt_coins(s["total_coins"]); tw = s["total_wins"]; tl = s["total_losses"]
+    text = (
         f"📊 <b>Статистика бота</b>\n\n"
-        f"👥 Пользователей: {s['total_users']}\n"
-        f"🆕 Новых сегодня: {s['new_today']}\n"
-        f"⭐ VIP игроков: {s['vip_count']}\n"
-        f"🪙 Монет в обращении: {fmt_coins(s['total_coins'])}\n"
+        f"👥 Пользователей: {tu}\n"
+        f"🆕 Новых сегодня: {nt}\n"
+        f"⭐ VIP игроков: {vc}\n"
+        f"🪙 Монет в обращении: {tc}\n"
+        f"🏦 В банке: {fmt_coins(bank)}\n"
+        f"👫 Рефералов: {refs}\n"
+        f"🎟 Промо активировано: {promos}\n"
         f"🎮 Игр сыграно: {total_games}\n"
-        f"🏆 Побед / 💀 Поражений: {s['total_wins']} / {s['total_losses']}\n"
-        f"📈 Общий WR игроков: {wr}",
-        parse_mode="HTML"
+        f"🏆 Побед / 💀 Поражений: {tw} / {tl}\n"
+        f"📈 WR игроков: {wr}"
     )
+    await callback.message.answer(text, parse_mode="HTML")
     await callback.answer()
 
 
@@ -1824,6 +1837,56 @@ async def adm_top(callback: CallbackQuery):
     await callback.answer()
 
 
+@dp.callback_query(F.data == "adm_delvip")
+async def adm_delvip(callback: CallbackQuery, state: FSMContext):
+    if not is_admin(callback.from_user.id): return
+    await state.set_state(AdminStates.wait_take_uid)
+    await state.update_data(action="delvip")
+    await callback.message.answer("Введи user_id игрока для снятия VIP:")
+    await callback.answer()
+
+
+@dp.callback_query(F.data == "adm_search")
+async def adm_search(callback: CallbackQuery, state: FSMContext):
+    if not is_admin(callback.from_user.id): return
+    await state.set_state(AdminStates.wait_broadcast)
+    await state.update_data(action="search")
+    await callback.message.answer("🔍 Введи имя, @username или ID игрока:")
+    await callback.answer()
+
+
+@dp.callback_query(F.data == "adm_msg")
+async def adm_msg(callback: CallbackQuery, state: FSMContext):
+    if not is_admin(callback.from_user.id): return
+    await state.set_state(AdminStates.wait_give_uid)
+    await state.update_data(action="msg")
+    await callback.message.answer("💬 Введи user_id игрока которому написать:")
+    await callback.answer()
+
+
+@dp.callback_query(F.data == "adm_gift")
+async def adm_gift(callback: CallbackQuery, state: FSMContext):
+    if not is_admin(callback.from_user.id): return
+    await state.set_state(AdminStates.wait_give_uid)
+    await state.update_data(action="gift")
+    await callback.message.answer("🎁 Введи user_id игрока для подарка:")
+    await callback.answer()
+
+
+@dp.callback_query(F.data == "adm_promo")
+async def adm_promo_cb(callback: CallbackQuery, state: FSMContext):
+    if not is_admin(callback.from_user.id): return
+    await state.set_state(AdminStates.wait_broadcast)
+    await state.update_data(action="promo")
+    await callback.message.answer(
+        "🎟 Введи параметры промокода через пробел:\n"
+        "<code>КОД МОНЕТЫ VIP_ДНЕЙ МАКС_АКТИВАЦИЙ</code>\n\n"
+        "Пример: <code>NEWUSER 1000 0 100</code>",
+        parse_mode="HTML"
+    )
+    await callback.answer()
+
+
 @dp.callback_query(F.data == "adm_give")
 async def adm_give_start(callback: CallbackQuery, state: FSMContext):
     if not is_admin(callback.from_user.id):
@@ -1835,6 +1898,50 @@ async def adm_give_start(callback: CallbackQuery, state: FSMContext):
 
 @dp.message(AdminStates.wait_give_uid)
 async def adm_give_uid(message: Message, state: FSMContext):
+    data = await state.get_data()
+    action = data.get("action", "give")
+
+    # Поиск игрока — обрабатываем здесь
+    if action == "search":
+        found = db.search_users(message.text.strip())
+        if not found:
+            await message.answer("❌ Игрок не найден.")
+        else:
+            lines = ["🔍 <b>Результаты поиска:</b>\n"]
+            for u in found[:10]:
+                vip = "⭐" if u["is_vip"] else ""
+                fn = u["full_name"]; sid = u["user_id"]; un = u["username"] or chr(8212)
+                co = fmt_coins(u["coins"]); lv = u["level"]
+                lines.append(f"• <b>{fn}</b> {vip}  ID: <code>{sid}</code> @{un} | {co} 🪙 Ур.{lv}")
+            await message.answer("\n".join(lines), parse_mode="HTML")
+        await state.clear()
+        return
+
+    # msg — спрашиваем текст
+    if action == "msg":
+        try:
+            uid = int(message.text.strip())
+            await state.update_data(target_uid=uid)
+            await state.set_state(AdminStates.wait_broadcast)
+            await state.update_data(action="msg_send", target_uid=uid)
+            await message.answer(f"Введи текст сообщения для игрока {uid}:")
+        except ValueError:
+            await message.answer("❌ Неверный ID")
+            await state.clear()
+        return
+
+    # gift — спрашиваем сумму
+    if action == "gift":
+        try:
+            uid = int(message.text.strip())
+            await state.update_data(target_uid=uid, action="gift_amount")
+            await state.set_state(AdminStates.wait_give_amount)
+            await message.answer(f"Введи количество монет для подарка игроку {uid}:")
+        except ValueError:
+            await message.answer("❌ Неверный ID")
+            await state.clear()
+        return
+
     try:
         uid = int(message.text.strip())
     except ValueError:
