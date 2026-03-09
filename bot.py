@@ -3432,11 +3432,8 @@ async def main():
         # ── WEBHOOK режим (Railway / production) ──
         from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
         WEBHOOK_PATH = "/webhook"
-        WEBHOOK_SECRET = os.environ.get("WEBHOOK_SECRET", "casino_secret_42")
-
         await bot.set_webhook(
             url=f"{webhook_url}{WEBHOOK_PATH}",
-            secret_token=WEBHOOK_SECRET,
             drop_pending_updates=True
         )
         print(f"🌐 Webhook: {webhook_url}{WEBHOOK_PATH}")
@@ -3449,8 +3446,8 @@ async def main():
             app.router.add_get("/admin/action", web_action_handler)
             app.router.add_get("/",             web_admin_handler)
 
-        # Webhook handler
-        SimpleRequestHandler(dispatcher=dp, bot=bot, secret_token=WEBHOOK_SECRET).register(app, path=WEBHOOK_PATH)
+        # Webhook handler — без secret_token
+        SimpleRequestHandler(dispatcher=dp, bot=bot).register(app, path=WEBHOOK_PATH)
         setup_application(app, dp, bot=bot)
 
         runner = web.AppRunner(app)
