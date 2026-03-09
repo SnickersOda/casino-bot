@@ -27,6 +27,20 @@ import database as db
 bot = Bot(token=config.BOT_TOKEN)
 dp  = Dispatcher(storage=MemoryStorage())
 
+# Debug middleware — логирует все входящие обновления
+from aiogram import BaseMiddleware
+from typing import Callable, Awaitable, Any
+from aiogram.types import TelegramObject
+
+class DebugMiddleware(BaseMiddleware):
+    async def __call__(self, handler: Callable, event: TelegramObject, data: dict) -> Any:
+        if hasattr(event, "text"):
+            print(f"📨 {event.from_user.id if hasattr(event,'from_user') else '?'}: {event.text!r}")
+        return await handler(event, data)
+
+dp.message.middleware(DebugMiddleware())
+
+
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 #  FSM-состояния
