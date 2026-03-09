@@ -321,18 +321,28 @@ async def cmd_start(message: Message):
         f"На твоём счету: <b>{fmt_coins(user['coins'])} 🪙</b>\n\n"
         "🃏 <b>Игры:</b>\n"
         "  /slots — Слоты\n"
-        "  /dice  — Кости\n"
+        "  /dice — Кости\n"
         "  /roulette — Рулетка\n"
         "  /blackjack — Блэкджек\n"
-        "  /crash — Краш\n\n"
+        "  /crash — Краш\n"
+        "  /mines — Мины 💣\n"
+        "  /case — Кейсы 🎁\n\n"
+        "💰 <b>Экономика:</b>\n"
+        "  /bank — Вклад под % 🏦\n"
+        "  /send — Перевод монет 💸\n"
+        "  /daily — Ежедневный бонус\n"
+        "  /streak — Стрик 🔥\n\n"
+        "👥 <b>Социальное:</b>\n"
+        "  /ref — Рефералы 👫\n"
+        "  /tournament — Турнир 🏆\n"
+        "  /top — Топ игроков\n\n"
         "📋 <b>Меню:</b>\n"
         "  /profile — Профиль\n"
         "  /balance — Баланс\n"
-        "  /daily   — Ежедневный бонус\n"
-        "  /tasks   — Задания\n"
-        "  /top     — Топ игроков\n"
-        "  /donate  — Магазин ⭐\n"
-        "  /help    — Помощь\n"
+        "  /tasks — Задания\n"
+        "  /donate — Магазин ⭐\n"
+        "  /promo — Промокод 🎟\n"
+        "  /help — Помощь\n"
     )
 
     # Кнопка добавления в группу сразу с правами администратора
@@ -3085,9 +3095,10 @@ def _page(sidebar_html, body_html):
 
 
 def _sidebar(pwd, active):
-    links = [("📊","Статистика","stats"),("👥","Игроки","players"),
-             ("💰","Монеты","coins"),("⭐","VIP","vip"),
-             ("🎲","Шансы игр","chances"),("📢","Рассылка","broadcast"),
+    links = [("📊","Статистика","stats"),("🔍","Поиск","search"),
+             ("👥","Игроки","players"),("💰","Монеты","coins"),
+             ("⭐","VIP","vip"),("💬","Сообщение","message"),
+             ("🎲","Шансы","chances"),("📢","Рассылка","broadcast"),
              ("🎟","Промокоды","promos")]
     s = '<div class="sidebar"><h2>🎰 Casino Admin</h2>'
     for icon, label, tab in links:
@@ -3126,10 +3137,42 @@ async def web_admin_handler(request: web.Request):
           <div class="card"><div class="lbl">📈 Winrate</div><div class="val">{wr}</div></div>
           <div class="card"><div class="lbl">🏆 Побед</div><div class="val">{s["total_wins"]}</div></div>
           <div class="card"><div class="lbl">💀 Поражений</div><div class="val">{s["total_losses"]}</div></div>
+          <div class="card"><div class="lbl">🏦 В банке</div><div class="val">{fmt_coins(db.get_bank_total())} 🪙</div></div>
+          <div class="card"><div class="lbl">👫 Рефералов</div><div class="val">{db.get_referral_count()}</div></div>
+          <div class="card"><div class="lbl">🎟 Промо активировано</div><div class="val">{db.get_promo_total_uses()}</div></div>
         </div>
         <div class="section"><div class="sh">🏆 Топ-10</div><div class="sb" style="padding:0">
         <table><tr><th>#</th><th>Игрок</th><th>VIP</th><th>Монеты</th><th>Ур.</th><th>Победы</th></tr>{tr}</table>
         </div></div>"""
+
+    elif tab == "search":
+        q2     = request.rel_url.query.get("q", "").strip()
+        found  = db.search_users(q2) if q2 else []
+        res_rows = ""
+        for u in found:
+            vb  = "⭐" if u["is_vip"] else "—"
+            uid_val = u["user_id"]
+            ban_url = f"/admin/action?pass={pwd}&action=ban_user&uid={uid_val}&tab=search"
+            res_rows += (f"<tr><td>{uid_val}</td><td><b>{u['full_name']}</b></td>"
+                         f"<td>@{u['username'] or '—'}</td><td>{fmt_coins(u['coins'])} 🪙</td>"
+                         f"<td>{u['level']}</td><td>{vb}</td><td>{u['wins']}/{u['losses']}</td>"
+                         f'<td><a href="{ban_url}" style="color:#f44">🚫</a></td></tr>')
+        res_html = ""
+        if q2:
+            res_html = (f'<div class="section"><div class="sh">Результаты ({len(found)})</div>'
+                        f'<div class="sb" style="padding:0"><table>'
+                        f'<tr><th>ID</th><th>Имя</th><th>@</th><th>Монеты</th><th>Ур.</th><th>VIP</th><th>В/П</th><th></th></tr>'
+                        f'{res_rows or "<tr><td colspan=8 style=\"text-align:center;padding:20px;color:#555\">Не найдено</td></tr>"}'
+                        f'</table></div></div>')
+        body = (f'<h1>🔍 Поиск игрока</h1><p class="sub">По имени, нику или ID</p>{alert}'
+                f'<div class="section"><div class="sh">Поиск</div><div class="sb">'
+                f'<form method="GET" action="/admin">'
+                f'<input type="hidden" name="pass" value="{pwd}">'
+                f'<input type="hidden" name="tab" value="search">'
+                f'<div style="display:flex;gap:8px">'
+                f'<input type="text" name="q" value="{q2}" placeholder="Имя, @username или ID" style="flex:1">'
+                f'<button class="btn btn-gold">🔍 Найти</button></div>'
+                f'</form></div></div>{res_html}')
 
     elif tab == "players":
         conn  = db.get_conn()
@@ -3196,6 +3239,31 @@ async def web_admin_handler(request: web.Request):
           <form method="GET" action="/admin/action">
             <input type="hidden" name="pass" value="{pwd}"><input type="hidden" name="action" value="set_chances"><input type="hidden" name="tab" value="chances">
             {rows}<button class="btn btn-gold" style="margin-top:6px">💾 Сохранить</button></form></div></div>"""
+
+    elif tab == "message":
+        body = (f'<h1>💬 Сообщение игроку</h1><p class="sub">Личное сообщение или подарок</p>{alert}'
+                f'<div class="r2">'
+                f'<div class="section"><div class="sh">✉️ Написать игроку</div><div class="sb">'
+                f'<form method="GET" action="/admin/action">'
+                f'<input type="hidden" name="pass" value="{pwd}">'
+                f'<input type="hidden" name="action" value="send_message">'
+                f'<input type="hidden" name="tab" value="message">'
+                f'<input type="number" name="uid" placeholder="Telegram ID игрока" required>'
+                f'<textarea name="text" placeholder="Текст сообщения..." rows="4" '
+                f'style="width:100%;background:#1a1a2e;color:#fff;border:1px solid #333;'
+                f'border-radius:8px;padding:10px;margin:8px 0;resize:vertical"></textarea>'
+                f'<button class="btn btn-gold">💬 Отправить</button>'
+                f'</form></div></div>'
+                f'<div class="section"><div class="sh">🎁 Подарить монеты + уведомление</div><div class="sb">'
+                f'<form method="GET" action="/admin/action">'
+                f'<input type="hidden" name="pass" value="{pwd}">'
+                f'<input type="hidden" name="action" value="gift_coins">'
+                f'<input type="hidden" name="tab" value="message">'
+                f'<input type="number" name="uid" placeholder="Telegram ID игрока" required>'
+                f'<input type="number" name="amount" placeholder="Количество монет" required>'
+                f'<input type="text" name="reason" placeholder="Причина (отобразится игроку)">'
+                f'<button class="btn btn-gold">🎁 Выдать с уведомлением</button>'
+                f'</form></div></div></div>')
 
     elif tab == "broadcast":
         body = f"""<h1>📢 Рассылка</h1><p class="sub">Сообщение всем игрокам ({s["total_users"]} чел.)</p>{alert}
@@ -3335,6 +3403,30 @@ async def web_action_handler(request: web.Request):
             code = q.get("code","")
             db.delete_promo(code)
             await rd(msg=f"Промокод+{code}+удалён")
+        elif action == "send_message":
+            uid2 = int(q["uid"]); txt2 = q.get("text","").strip()
+            if not txt2: await rd(err="Пустое+сообщение"); return
+            try:
+                await bot.send_message(uid2, f"📨 <b>Сообщение от администратора:</b>\n\n{txt2}", parse_mode="HTML")
+                await rd(msg=f"Сообщение+отправлено+{uid2}")
+            except Exception as ex: await rd(err=str(ex)[:50])
+        elif action == "gift_coins":
+            uid2 = int(q["uid"]); amt2 = int(q["amount"])
+            reason2 = q.get("reason","") or "подарок от администратора"
+            db.update_coins(uid2, amt2)
+            try:
+                await bot.send_message(uid2,
+                    f"🎁 <b>Администратор выдал монеты!</b>\n\n💰 +{fmt_coins(amt2)} 🪙\n📝 {reason2}",
+                    parse_mode="HTML")
+            except: pass
+            await rd(msg=f"Выдано+{amt2}+монет+{uid2}+с+уведомлением")
+        elif action == "ban_user":
+            uid2 = int(q["uid"])
+            db.set_setting(f"banned_{uid2}", "1")
+            db.set_coins(uid2, 0)
+            try: await bot.send_message(uid2, "🚫 <b>Вы заблокированы администратором.</b>", parse_mode="HTML")
+            except: pass
+            await rd(msg=f"Игрок+{uid2}+забанен")
         else:
             await rd(err="Неизвестное+действие")
     except web.HTTPFound: raise

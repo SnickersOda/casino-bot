@@ -135,7 +135,6 @@ def init_db():
 
     _close(conn)
     print(f"✅ БД: {'PostgreSQL' if USE_PG else 'SQLite'}")
-    print("✅ База данных инициализирована")
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -535,3 +534,46 @@ def reset_tournament():
     _commit(conn); _close(conn)
     # Следующий турнир через 7 дней
     set_setting("tournament_end", str(int(time.time()) + 7*86400))
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+#  ФУНКЦИИ ДЛЯ АДМИН ПАНЕЛИ
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+def search_users(query: str):
+    conn = get_conn()
+    q = f"%{query}%"
+    try:
+        uid = int(query)
+        rows = _all(conn, "SELECT * FROM users WHERE user_id=? OR LOWER(username) LIKE LOWER(?) OR LOWER(full_name) LIKE LOWER(?) ORDER BY coins DESC LIMIT 20", (uid, q, q))
+    except ValueError:
+        rows = _all(conn, "SELECT * FROM users WHERE LOWER(username) LIKE LOWER(?) OR LOWER(full_name) LIKE LOWER(?) ORDER BY coins DESC LIMIT 20", (q, q))
+    _close(conn)
+    return rows
+
+def get_bank_total():
+    conn = get_conn()
+    row = _one(conn, "SELECT COALESCE(SUM(amount),0) as c FROM deposits WHERE amount>0")
+    _close(conn)
+    return row["c"] if row else 0
+
+def get_active_deposits_count():
+    conn = get_conn()
+    row = _one(conn, "SELECT COUNT(*) as c FROM deposits WHERE amount>0")
+    _close(conn)
+    return row["c"] if row else 0
+
+def get_promo_total_uses():
+    conn = get_conn()
+    row = _one(conn, "SELECT COALESCE(SUM(uses),0) as c FROM promocodes")
+    _close(conn)
+    return row["c"] if row else 0
+
+def get_referral_count():
+    conn = get_conn()
+    try:
+        row = _one(conn, "SELECT COUNT(*) as c FROM referrals")
+        _close(conn)
+        return row["c"] if row else 0
+    except:
+        _close(conn)
+        return 0
