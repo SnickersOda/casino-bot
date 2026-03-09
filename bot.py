@@ -3405,17 +3405,51 @@ async def vip_checker():
 
 
 async def main():
+    import os
     await on_startup()
     asyncio.create_task(vip_checker())
     asyncio.create_task(daily_notifier())
     asyncio.create_task(bank_checker())
     asyncio.create_task(tournament_checker())
-    # Веб-панель только если явно разрешена через переменную WEB_ADMIN=1
-    import os
-    if os.environ.get("WEB_ADMIN") == "1":
-        asyncio.create_task(start_web_panel())
-    print("🚀 Запуск polling...")
-    await dp.start_polling(bot, skip_updates=True)
+
+    webhook_url = os.environ.get("WEBHOOK_URL", "")
+
+    if webhook_url:
+        # ── WEBHOOK режим (Railway / production) ──
+        from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
+        WEBHOOK_PATH = "/webhook"
+        WEBHOOK_SECRET = os.environ.get("WEBHOOK_SECRET", "casino_secret_42")
+
+        await bot.set_webhook(
+            url=f"{webhook_url}{WEBHOOK_PATH}",
+            secret_token=WEBHOOK_SECRET,
+            drop_pending_updates=True
+        )
+        print(f"🌐 Webhook: {webhook_url}{WEBHOOK_PATH}")
+
+        app = web.Application()
+
+        # Веб-панель
+        if os.environ.get("WEB_ADMIN") == "1":
+            app.router.add_get("/admin",        web_admin_handler)
+            app.router.add_get("/admin/action", web_action_handler)
+            app.router.add_get("/",             web_admin_handler)
+
+        # Webhook handler
+        SimpleRequestHandler(dispatcher=dp, bot=bot, secret_token=WEBHOOK_SECRET).register(app, path=WEBHOOK_PATH)
+        setup_application(app, dp, bot=bot)
+
+        runner = web.AppRunner(app)
+        await runner.setup()
+        port = int(os.environ.get("PORT", 8080))
+        await web.TCPSite(runner, "0.0.0.0", port).start()
+        print(f"🚀 Webhook сервер запущен на порту {port}")
+        await asyncio.Event().wait()  # держим процесс живым
+    else:
+        # ── POLLING режим (локальная разработка) ──
+        await bot.delete_webhook(drop_pending_updates=True)
+        print("🚀 Запуск polling (локально)...")
+        await dp.start_polling(bot, skip_updates=True)
 
 
 if __name__ == "__main__":
