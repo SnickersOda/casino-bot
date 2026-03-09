@@ -122,6 +122,11 @@ def init_db():
             _exec(conn, "INSERT OR IGNORE INTO settings (key,value) VALUES (?,?)",
                   (f"win_chance_{game}", str(chance)))
 
+    # Новые таблицы
+    init_referral(conn)
+    init_deposits(conn)
+    init_tournament(conn)
+
     _commit(conn)
     _close(conn)
     print(f"✅ БД: {'PostgreSQL' if USE_PG else 'SQLite'}")
@@ -177,6 +182,13 @@ def record_game(user_id, won, bet):
     else:
         _exec(conn, "UPDATE users SET losses=losses+1,total_bet=total_bet+? WHERE user_id=?", (bet,user_id))
     _commit(conn); _close(conn)
+    # Турнирные очки за победу
+    if won and bet > 0:
+        try:
+            row = get_user(user_id)
+            if row:
+                add_tournament_points(user_id, row["full_name"], bet)
+        except: pass
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -355,3 +367,166 @@ def get_all_user_ids():
     conn = get_conn()
     rows = _all(conn, "SELECT user_id FROM users")
     _close(conn); return [r["user_id"] for r in rows]
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+#  РЕФЕРАЛЫ
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+def init_referral(conn):
+    _exec(conn, """CREATE TABLE IF NOT EXISTS referrals (
+        referrer_id BIGINT, referee_id BIGINT PRIMARY KEY,
+        created_at BIGINT DEFAULT 0)""")
+
+def add_referral(referrer_id, referee_id):
+    conn = get_conn()
+    try:
+        if USE_PG:
+            _exec(conn, "INSERT INTO referrals (referrer_id,referee_id,created_at) VALUES (%s,%s,%s) ON CONFLICT DO NOTHING",
+                  (referrer_id, referee_id, int(time.time())))
+        else:
+            _exec(conn, "INSERT OR IGNORE INTO referrals (referrer_id,referee_id,created_at) VALUES (?,?,?)",
+                  (referrer_id, referee_id, int(time.time())))
+        _commit(conn)
+    except: pass
+    _close(conn)
+
+def get_referrals(user_id):
+    conn = get_conn()
+    rows = _all(conn, "SELECT * FROM referrals WHERE referrer_id=?", (user_id,))
+    _close(conn); return rows
+
+def find_user_by_username(username):
+    conn = get_conn()
+    row = _one(conn, "SELECT * FROM users WHERE LOWER(username)=LOWER(?)", (username.lstrip("@"),))
+    _close(conn); return row
+
+def get_user_by_id_safe(uid_str):
+    try:
+        conn = get_conn()
+        row = _one(conn, "SELECT * FROM users WHERE user_id=?", (int(uid_str),))
+        _close(conn); return row
+    except: return None
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+#  БАНК (ВКЛАДЫ)
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+def init_deposits(conn):
+    _exec(conn, """CREATE TABLE IF NOT EXISTS deposits (
+        user_id BIGINT PRIMARY KEY, amount BIGINT DEFAULT 0,
+        rate REAL DEFAULT 0, unlock_at BIGINT DEFAULT 0)""")
+
+def get_deposit(user_id):
+    conn = get_conn()
+    row = _one(conn, "SELECT * FROM deposits WHERE user_id=?", (user_id,))
+    _close(conn); return row
+
+def create_deposit(user_id, amount, rate, days):
+    conn = get_conn()
+    unlock = int(time.time()) + days * 86400
+    if USE_PG:
+        _exec(conn, """INSERT INTO deposits (user_id,amount,rate,unlock_at) VALUES (%s,%s,%s,%s)
+              ON CONFLICT (user_id) DO UPDATE SET amount=%s,rate=%s,unlock_at=%s""",
+              (user_id, amount, rate, unlock, amount, rate, unlock))
+    else:
+        _exec(conn, "INSERT OR REPLACE INTO deposits (user_id,amount,rate,unlock_at) VALUES (?,?,?,?)",
+              (user_id, amount, rate, unlock))
+    _commit(conn); _close(conn)
+
+def clear_deposit(user_id):
+    conn = get_conn()
+    _exec(conn, "DELETE FROM deposits WHERE user_id=?", (user_id,))
+    _commit(conn); _close(conn)
+
+def get_ready_deposits():
+    conn = get_conn()
+    rows = _all(conn, "SELECT * FROM deposits WHERE unlock_at>0 AND unlock_at<=? AND amount>0",
+                (int(time.time()),))
+    _close(conn); return rows
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+#  СТРИКИ
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+def get_streak(user_id):
+    val = get_setting(f"streak_{user_id}")
+    return int(val) if val else 0
+
+def update_streak(user_id):
+    """Вызывать при получении ежедневного бонуса. Возвращает новый стрик."""
+    last_str  = get_setting(f"streak_date_{user_id}", "")
+    today     = str(date.today())
+    yesterday = str(date.today().replace(day=date.today().day - 1)) if date.today().day > 1 else ""
+    streak    = get_streak(user_id)
+
+    if last_str == today:
+        return streak  # уже получили сегодня
+    if last_str == yesterday:
+        streak += 1    # продолжаем стрик
+    else:
+        streak = 1     # сброс
+
+    set_setting(f"streak_{user_id}", str(streak))
+    set_setting(f"streak_date_{user_id}", today)
+    return streak
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+#  ТУРНИР
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+def init_tournament(conn):
+    _exec(conn, """CREATE TABLE IF NOT EXISTS tournament (
+        user_id BIGINT PRIMARY KEY, full_name TEXT, points BIGINT DEFAULT 0)""")
+
+def add_tournament_points(user_id, full_name, points):
+    if points <= 0: return
+    conn = get_conn()
+    if USE_PG:
+        _exec(conn, """INSERT INTO tournament (user_id,full_name,points) VALUES (%s,%s,%s)
+              ON CONFLICT (user_id) DO UPDATE SET points=tournament.points+%s, full_name=%s""",
+              (user_id, full_name, points, points, full_name))
+    else:
+        existing = _one(conn, "SELECT points FROM tournament WHERE user_id=?", (user_id,))
+        if existing:
+            _exec(conn, "UPDATE tournament SET points=points+?,full_name=? WHERE user_id=?",
+                  (points, full_name, user_id))
+        else:
+            _exec(conn, "INSERT INTO tournament (user_id,full_name,points) VALUES (?,?,?)",
+                  (user_id, full_name, points))
+    _commit(conn); _close(conn)
+
+def get_tournament_top(limit=10):
+    conn = get_conn()
+    rows = _all(conn, "SELECT * FROM tournament ORDER BY points DESC LIMIT ?", (limit,))
+    _close(conn); return rows
+
+def get_tournament_position(user_id):
+    conn = get_conn()
+    if USE_PG:
+        row = _one(conn, "SELECT COUNT(*)+1 as pos FROM tournament WHERE points>(SELECT COALESCE(points,0) FROM tournament WHERE user_id=%s)", (user_id,))
+    else:
+        row = _one(conn, "SELECT COUNT(*)+1 as pos FROM tournament WHERE points>(SELECT COALESCE(points,0) FROM tournament WHERE user_id=?)", (user_id,))
+    _close(conn)
+    return row["pos"] if row else None
+
+def get_tournament_points(user_id):
+    conn = get_conn()
+    row = _one(conn, "SELECT points FROM tournament WHERE user_id=?", (user_id,))
+    _close(conn); return row["points"] if row else 0
+
+def get_tournament_end():
+    val = get_setting("tournament_end")
+    if not val:
+        # Устанавливаем конец на следующий понедельник
+        now  = int(time.time())
+        end  = now + (7 - datetime.fromtimestamp(now).weekday()) * 86400
+        set_setting("tournament_end", str(end))
+        return end
+    return int(val)
+
+def reset_tournament():
+    conn = get_conn()
+    _exec(conn, "DELETE FROM tournament")
+    _commit(conn); _close(conn)
+    # Следующий турнир через 7 дней
+    set_setting("tournament_end", str(int(time.time()) + 7*86400))
