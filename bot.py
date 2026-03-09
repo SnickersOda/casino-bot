@@ -3343,6 +3343,12 @@ async def _finish_tournament():
 #  ЗАПУСК
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 async def on_startup():
+    # Сбрасываем старые соединения — защита от TelegramConflictError
+    try:
+        await bot.delete_webhook(drop_pending_updates=True)
+    except: pass
+    await asyncio.sleep(2)
+
     db.init_db()
     print("✅ База данных инициализирована")
 
@@ -3410,7 +3416,8 @@ async def main():
     asyncio.create_task(daily_notifier())
     asyncio.create_task(bank_checker())
     asyncio.create_task(tournament_checker())
-    await start_web_panel()
+    asyncio.create_task(start_web_panel())   # веб-панель фоном
+    print("🚀 Запуск polling...")
     await dp.start_polling(bot, skip_updates=True)
 
 
