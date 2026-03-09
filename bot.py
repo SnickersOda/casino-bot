@@ -3410,7 +3410,10 @@ async def main():
     asyncio.create_task(daily_notifier())
     asyncio.create_task(bank_checker())
     asyncio.create_task(tournament_checker())
-    asyncio.create_task(start_web_panel())   # веб-панель фоном
+    # Веб-панель только если явно разрешена через переменную WEB_ADMIN=1
+    import os
+    if os.environ.get("WEB_ADMIN") == "1":
+        asyncio.create_task(start_web_panel())
     print("🚀 Запуск polling...")
     await dp.start_polling(bot, skip_updates=True)
 
