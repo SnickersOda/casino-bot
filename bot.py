@@ -3835,6 +3835,52 @@ async def usdt_rate_checker():
                 except: pass
 
 
+async def daily_notifier():
+    """Фоновая задача: каждый час проверяет у кого готов бонус и шлёт уведомление."""
+    from datetime import date
+    while True:
+        await asyncio.sleep(3600)
+        try:
+            uids = db.get_all_user_ids()
+            today = str(date.today())
+            for uid in uids:
+                # Пропускаем если уведомления выключены
+                if db.get_setting(f"notify_{uid}") == "off":
+                    continue
+                user = db.get_user(uid)
+                if not user:
+                    continue
+                # Если сегодня ещё не получал бонус — напомнить
+                if user["daily_last"] != today:
+                    # Не спамить — ставим флаг что уже напомнили сегодня
+                    notif_key = f"notif_sent_{uid}_{today}"
+                    if db.get_setting(notif_key):
+                        continue
+                    db.set_setting(notif_key, "1")
+                    try:
+                        bonus = config.DAILY_BONUS * 2 if user["is_vip"] else config.DAILY_BONUS
+                        await bot.send_message(
+                            uid,
+                            f"🔔 <b>Ежедневный бонус готов!</b>\n\n"
+                            f"Напиши <code>бонус</code> или /daily\n"
+                            f"и получи <b>{fmt_coins(bonus)} 🪙</b>!",
+                            parse_mode="HTML"
+                        )
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+
+
+async def vip_checker():
+    """Фоновая задача: каждый час снимает истёкший VIP."""
+    while True:
+        await asyncio.sleep(3600)
+        db.check_vip_expired()
+
+
+
+
 async def on_startup():
     db.init_db()
     print("✅ База данных инициализирована")
@@ -3896,13 +3942,6 @@ async def on_startup():
 
     print("✅ Меню команд зарегистрировано")
     print("🤖 Бот запущен!")
-
-
-async def vip_checker():
-    """Фоновая задача: каждый час снимает истёкший VIP."""
-    while True:
-        await asyncio.sleep(3600)
-        db.check_vip_expired()
 
 
 async def main():
@@ -4251,41 +4290,6 @@ async def inline_handler(query: InlineQuery):
 #  УВЕДОМЛЕНИЯ О БОНУСЕ  🔔
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-async def daily_notifier():
-    """Фоновая задача: каждый час проверяет у кого готов бонус и шлёт уведомление."""
-    from datetime import date
-    while True:
-        await asyncio.sleep(3600)
-        try:
-            uids = db.get_all_user_ids()
-            today = str(date.today())
-            for uid in uids:
-                # Пропускаем если уведомления выключены
-                if db.get_setting(f"notify_{uid}") == "off":
-                    continue
-                user = db.get_user(uid)
-                if not user:
-                    continue
-                # Если сегодня ещё не получал бонус — напомнить
-                if user["daily_last"] != today:
-                    # Не спамить — ставим флаг что уже напомнили сегодня
-                    notif_key = f"notif_sent_{uid}_{today}"
-                    if db.get_setting(notif_key):
-                        continue
-                    db.set_setting(notif_key, "1")
-                    try:
-                        bonus = config.DAILY_BONUS * 2 if user["is_vip"] else config.DAILY_BONUS
-                        await bot.send_message(
-                            uid,
-                            f"🔔 <b>Ежедневный бонус готов!</b>\n\n"
-                            f"Напиши <code>бонус</code> или /daily\n"
-                            f"и получи <b>{fmt_coins(bonus)} 🪙</b>!",
-                            parse_mode="HTML"
-                        )
-                    except Exception:
-                        pass
-        except Exception:
-            pass
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -4893,6 +4897,3 @@ async def cmd_guess(message: Message):
         f"Введи число:",
         parse_mode="HTML"
     )
-
-
-
