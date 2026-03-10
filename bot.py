@@ -57,6 +57,31 @@ class AdminStates(StatesGroup):
     wait_chance_val  = State()
 
 
+class BetStates(StatesGroup):
+    wait_bet = State()  # ждём ставку, game сохранён в data
+
+GAME_NAMES = {
+    "slots": "🎰 Слоты", "dice": "🎲 Кости", "roulette": "🎡 Рулетка",
+    "blackjack": "🃏 Блэкджек", "crash": "🚀 Краш", "mines": "💣 Мины",
+    "reaction": "⚡ Реакция", "rps": "✂️ КНБ",
+    "guess": "🧠 Угадай число", "math": "🔢 Математика",
+}
+
+def game_bet_kb(game: str) -> InlineKeyboardMarkup:
+    """Клавиатура быстрых ставок для игры."""
+    bets = [100, 500, 1000, 5000, 10000]
+    rows = []
+    row = []
+    for b2 in bets:
+        row.append(InlineKeyboardButton(text=f"{fmt_coins(b2)}", callback_data=f"bet_{game}_{b2}"))
+        if len(row) == 3:
+            rows.append(row); row = []
+    if row:
+        rows.append(row)
+    rows.append([InlineKeyboardButton(text="✏️ Своя ставка", callback_data=f"custombet_{game}")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 #  ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -73,14 +98,17 @@ def fmt_coins(n: int) -> str:
 
 
 def display_name(user) -> str:
-    """Имя игрока с prestige титулом."""
+    """Имя игрока с prestige титулом — безопасная версия."""
     if not isinstance(user, dict):
         return str(user)
-    name  = user.get("full_name", "")
-    title = user.get("title", "") or ""
-    if not title:
-        lvl = user.get("prestige", 0) or 0
-        title = db.PRESTIGE_LEVELS.get(lvl, {}).get("title", "")
+    name = user.get("full_name", "") or ""
+    try:
+        title = user.get("title", "") or ""
+        if not title:
+            lvl = int(user.get("prestige", 0) or 0)
+            title = db.PRESTIGE_LEVELS.get(lvl, {}).get("title", "") or ""
+    except Exception:
+        title = ""
     return (title + " " + name).strip() if title else name
 
 
@@ -368,26 +396,28 @@ async def cmd_start(message: Message):
     )
 
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🎰 Слоты",     callback_data="play_slots"),
-         InlineKeyboardButton(text="🎲 Кости",     callback_data="play_dice")],
-        [InlineKeyboardButton(text="🎡 Рулетка",   callback_data="play_roulette"),
-         InlineKeyboardButton(text="🃏 Блэкджек",  callback_data="play_blackjack")],
-        [InlineKeyboardButton(text="🚀 Краш",      callback_data="play_crash"),
-         InlineKeyboardButton(text="💣 Мины",      callback_data="play_mines")],
-        [InlineKeyboardButton(text="⚡ Реакция",   callback_data="play_reaction"),
-         InlineKeyboardButton(text="✂️ КНБ",       callback_data="play_rps")],
-        [InlineKeyboardButton(text="🧠 Угадай число", callback_data="play_guess"),
-         InlineKeyboardButton(text="🔢 Математика",   callback_data="play_math")],
-        [InlineKeyboardButton(text="🎁 Кейсы",     callback_data="menu_cases"),
-         InlineKeyboardButton(text="💱 Биржа USDT", callback_data="menu_exchange")],
-        [InlineKeyboardButton(text="👤 Профиль",   callback_data="menu_profile"),
-         InlineKeyboardButton(text="🏆 Турнир",    callback_data="menu_tournament")],
-        [InlineKeyboardButton(text="🎁 Бонус",     callback_data="menu_daily"),
-         InlineKeyboardButton(text="⭐ Магазин",   callback_data="open_shop")],
-        [InlineKeyboardButton(
-            text="➕ Добавить в группу",
-            url=f"https://t.me/{bot_username}?startgroup=true&admin=change_info+delete_messages+restrict_members+invite_users+pin_messages+manage_video_chats+manage_chat"
-        )],
+        [InlineKeyboardButton(text="━━━ 🎰 КАЗИНО ━━━",       callback_data="noop")],
+        [InlineKeyboardButton(text="🎰 Слоты",    callback_data="play_slots"),
+         InlineKeyboardButton(text="🎲 Кости",    callback_data="play_dice"),
+         InlineKeyboardButton(text="🎡 Рулетка",  callback_data="play_roulette")],
+        [InlineKeyboardButton(text="🃏 Блэкджек", callback_data="play_blackjack"),
+         InlineKeyboardButton(text="🚀 Краш",     callback_data="play_crash"),
+         InlineKeyboardButton(text="💣 Мины",     callback_data="play_mines")],
+        [InlineKeyboardButton(text="━━━ 🎮 СКИЛЛ ━━━",        callback_data="noop")],
+        [InlineKeyboardButton(text="⚡ Реакция",  callback_data="play_reaction"),
+         InlineKeyboardButton(text="✂️ КНБ",      callback_data="play_rps"),
+         InlineKeyboardButton(text="🧠 Угадай",   callback_data="play_guess")],
+        [InlineKeyboardButton(text="🔢 Математика", callback_data="play_math")],
+        [InlineKeyboardButton(text="━━━ 💰 ЭКОНОМИКА ━━━",    callback_data="noop")],
+        [InlineKeyboardButton(text="🎁 Кейсы",    callback_data="menu_cases"),
+         InlineKeyboardButton(text="💱 USDT",     callback_data="menu_exchange"),
+         InlineKeyboardButton(text="👑 Prestige", callback_data="menu_prestige")],
+        [InlineKeyboardButton(text="👤 Профиль",  callback_data="menu_profile"),
+         InlineKeyboardButton(text="🏆 Турнир",   callback_data="menu_tournament"),
+         InlineKeyboardButton(text="🎁 Бонус",    callback_data="menu_daily")],
+        [InlineKeyboardButton(text="⭐ Магазин",  callback_data="open_shop"),
+         InlineKeyboardButton(text="➕ Добавить в группу",
+            url=f"https://t.me/{bot_username}?startgroup=true&admin=change_info+delete_messages+restrict_members+invite_users+pin_messages+manage_video_chats+manage_chat")],
     ])
 
     await message.answer(text, parse_mode="HTML", reply_markup=keyboard)
@@ -397,37 +427,398 @@ async def cmd_start(message: Message):
 async def cb_quick_play(callback: CallbackQuery):
     await callback.answer()
 
+# Клавиатура быстрой ставки
+def bet_keyboard(game: str) -> InlineKeyboardMarkup:
+    bets = [100, 500, 1000, 5000, 10000]
+    row1 = [InlineKeyboardButton(text=f"{fmt_coins(b)} 🪙", callback_data=f"quickbet_{game}_{b}") for b in bets[:3]]
+    row2 = [InlineKeyboardButton(text=f"{fmt_coins(b)} 🪙", callback_data=f"quickbet_{game}_{b}") for b in bets[3:]]
+    row3 = [InlineKeyboardButton(text="✏️ Своя ставка", callback_data=f"custombet_{game}")]
+    return InlineKeyboardMarkup(inline_keyboard=[row1, row2, row3])
+
+# Для рулетки — отдельная клавиатура с выбором цвета
+def roulette_color_kb(bet: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="🔴 Красное", callback_data=f"roulette_red_{bet}"),
+        InlineKeyboardButton(text="⚫ Чёрное",  callback_data=f"roulette_black_{bet}"),
+    ]])
+
+# Для кейсов — отдельное подменю
+def cases_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🥉 Бронза  — 1 USDT",   callback_data="case_bronze")],
+        [InlineKeyboardButton(text="🥈 Серебро — 5 USDT",   callback_data="case_silver")],
+        [InlineKeyboardButton(text="🥇 Золото  — 20 USDT",  callback_data="case_gold")],
+        [InlineKeyboardButton(text="💎 Алмаз  — 100 USDT",  callback_data="case_diamond")],
+    ])
+
+# Для prestige — кнопки покупки
+def prestige_keyboard(current_lvl: int) -> InlineKeyboardMarkup:
+    levels = db.PRESTIGE_LEVELS
+    rows = []
+    for i in range(1, 6):
+        p = levels[i]
+        if i <= current_lvl:
+            rows.append([InlineKeyboardButton(text=f"✅ {p['name']} — куплен", callback_data="prestige_owned")])
+        else:
+            cost = p["price_usdt"] - levels[current_lvl]["price_usdt"]
+            rows.append([InlineKeyboardButton(text=f"🔒 {p['name']} — {cost} USDT → Купить", callback_data=f"prestige_buy_{i}")])
+    rows.append([InlineKeyboardButton(text="✏️ Изменить приписку", callback_data="prestige_title")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
 @dp.callback_query(F.data.startswith("play_") | F.data.startswith("menu_"))
-async def cb_start_buttons(callback: CallbackQuery):
+async def cb_start_buttons(callback: CallbackQuery, state: FSMContext):
     action = callback.data
-    uid = callback.from_user.id
-    answers = {
-        "play_slots":    "🎰 Слоты: напиши <code>/slots 100</code>",
-        "play_dice":     "🎲 Кости: напиши <code>/dice 100</code>",
-        "play_roulette": "🎡 Рулетка: напиши <code>/roulette red 100</code>",
-        "play_blackjack":"🃏 Блэкджек: напиши <code>/blackjack 100</code>",
-        "play_crash":    "🚀 Краш: напиши <code>/crash 100</code>",
-        "play_mines":    "💣 Мины: напиши <code>/mines 100</code>",
-        "play_reaction": "⚡ Реакция: напиши <code>/reaction 100</code>",
-        "play_rps":      "✂️ КНБ: напиши <code>/rps 100</code>",
-        "play_guess":    "🧠 Угадай число: напиши <code>/guess 100</code>",
-        "play_math":     "🔢 Математика: напиши <code>/mathgame 100</code>",
-        "menu_cases":    "🎁 Кейсы: напиши <code>/case bronze</code>\nЦены в USDT: bronze 1, silver 5, gold 20, diamond 100",
-        "menu_exchange": "💱 Биржа USDT:\n/exchange — обмен монет\nКурс: /usdt",
-        "menu_profile":  None,  # вызовем напрямую
-        "menu_tournament": None,
-        "menu_daily":    None,
+    game_map = {
+        "play_slots": "slots", "play_dice": "dice", "play_roulette": "roulette",
+        "play_blackjack": "blackjack", "play_crash": "crash", "play_mines": "mines",
+        "play_reaction": "reaction", "play_rps": "rps", "play_guess": "guess",
+        "play_math": "math",
     }
-    if action == "menu_profile":
+    if action in game_map:
+        game = game_map[action]
+        name = GAME_NAMES[game]
+        user = db.get_user(callback.from_user.id)
+        await callback.message.answer(
+            f"{name}\n\n💰 Баланс: <b>{fmt_coins(user['coins'])} 🪙</b>\n\nВыбери ставку:",
+            parse_mode="HTML",
+            reply_markup=bet_keyboard(game)
+        )
+    elif action == "menu_cases":
+        usdt = db.get_usdt(callback.from_user.id)
+        await callback.message.answer(
+            f"🎁 <b>Кейсы</b> (покупка за USDT)\n\n💵 Твой баланс: <b>{usdt} USDT</b>\n\n💱 Нет USDT? /exchange",
+            parse_mode="HTML", reply_markup=cases_keyboard()
+        )
+    elif action == "menu_exchange":
+        await callback.message.answer(f"💵 Курс USDT: <b>{db.get_usdt_rate()} 🪙 = 1 USDT</b>\n\n/exchange 5 — обменять 5 USDT\n/usdt — текущий курс", parse_mode="HTML")
+    elif action == "menu_prestige":
+        uid2 = callback.from_user.id
+        lvl2, title2 = db.get_prestige(uid2)
+        usdt2 = db.get_usdt(uid2)
+        levels = db.PRESTIGE_LEVELS
+        bonus2 = int(db.get_prestige_bonus(uid2) * 100)
+        pname2 = levels[lvl2]["name"] or "Нет"
+        lines2 = [f"👑 <b>Prestige</b>\n\n💵 USDT: <b>{usdt2}</b>\nТекущий: <b>{pname2}</b>"]
+        if bonus2: lines2.append(f"+{bonus2}% к выигрышам")
+        if title2: lines2.append(f"🏷 {title2}")
+        lines2.append("\n<b>Доступные статусы:</b>")
+        for i in range(1, 6):
+            p = levels[i]
+            mark = "✅" if i == lvl2 else ("✓" if i < lvl2 else "🔒")
+            cost = p["price_usdt"] - levels[lvl2]["price_usdt"]
+            cost_str = f"({cost} USDT)" if i > lvl2 else ""
+            lines2.append(f"{mark} {p['name']} {cost_str} | +{int(p['bonus']*100)}% | {p['title']}")
+        await callback.message.answer("\n".join(lines2), parse_mode="HTML",
+                                      reply_markup=prestige_keyboard(lvl2))
+    elif action == "menu_profile":
         await cmd_profile(callback.message)
     elif action == "menu_tournament":
         await cmd_tournament(callback.message)
     elif action == "menu_daily":
         await cmd_daily(callback.message)
-    else:
-        txt = answers.get(action, "")
-        if txt:
-            await callback.message.answer(txt, parse_mode="HTML")
+    await callback.answer()
+
+
+@dp.callback_query(F.data == "noop")
+async def cb_noop(callback: CallbackQuery):
+    await callback.answer()
+
+
+@dp.callback_query(F.data == "menu_top")
+async def cb_menu_top(callback: CallbackQuery):
+    # Вызываем top как будто это сообщение
+    import types
+    fake = types.SimpleNamespace(
+        from_user=callback.from_user,
+        text="/top",
+        answer=callback.message.answer,
+        chat=callback.message.chat,
+        message_id=callback.message.message_id,
+        bot=callback.message.bot,
+    )
+    await cmd_top(fake)
+    await callback.answer()
+
+
+@dp.callback_query(F.data.startswith("quickbet_"))
+async def cb_quickbet(callback: CallbackQuery):
+    """Быстрая ставка — сразу запускаем игру."""
+    parts = callback.data.split("_")
+    game = parts[1]
+    bet  = int(parts[2])
+    uid  = callback.from_user.id
+    user = db.get_user(uid)
+
+    # Проверяем кулдаун
+    cd = db.get_game_cooldown(uid, game)
+    if cd > 0:
+        await callback.answer(f"⏳ Подожди {cd} сек!", show_alert=True); return
+
+    if user["coins"] < bet:
+        await callback.answer(f"❌ Недостаточно монет! У тебя {fmt_coins(user['coins'])} 🪙", show_alert=True); return
+
+    await callback.answer()
+    # Создаём фейковое сообщение с командой и вызываем хендлер
+    fake_text = f"/{game} {bet}"
+    if game == "roulette":
+        # Для рулетки нужен цвет — показываем выбор
+        await callback.message.answer(
+            f"🎡 Рулетка — ставка {fmt_coins(bet)} 🪙\nВыбери цвет:",
+            parse_mode="HTML",
+            reply_markup=roulette_color_kb(bet)
+        )
+        return
+    # Для остальных — инжектируем через event
+    import types
+    fake = types.SimpleNamespace(
+        from_user=callback.from_user,
+        text=fake_text,
+        answer=callback.message.answer,
+        chat=callback.message.chat,
+        message_id=callback.message.message_id,
+        bot=callback.message.bot,
+    )
+    # Словарь обработчиков
+    handlers = {
+        "slots": cmd_slots, "dice": cmd_dice,
+        "blackjack": cmd_blackjack, "crash": cmd_crash,
+        "mines": cmd_mines, "reaction": cmd_reaction,
+        "rps": cmd_rps, "guess": cmd_guess, "math": cmd_mathgame,
+    }
+    if game in handlers:
+        await handlers[game](fake)
+    elif game == "roulette":
+        await callback.message.answer(
+            f"🎡 Рулетка — выбери цвет:",
+            reply_markup=roulette_color_kb(bet)
+        )
+
+
+@dp.callback_query(F.data.startswith("custombet_"))
+async def cb_custombet(callback: CallbackQuery, state: FSMContext):
+    """Своя ставка — просим написать число."""
+    game = callback.data.split("_")[1]
+    await state.set_state(BetStates.wait_bet)
+    await state.update_data(game=game)
+    user = db.get_user(callback.from_user.id)
+    await callback.message.answer(
+        f"{GAME_NAMES.get(game, game)} — введи ставку:\n"
+        f"💰 Баланс: {fmt_coins(user['coins'])} 🪙\n"
+        f"(от {config.MIN_BET} до {fmt_coins(config.MAX_BET)})"
+    )
+    await callback.answer()
+
+
+@dp.message(BetStates.wait_bet)
+async def handle_custom_bet(message: Message, state: FSMContext):
+    """Получаем свою ставку и запускаем игру."""
+    data = await state.get_data()
+    game = data.get("game")
+    await state.clear()
+
+    import types
+    user = db.get_user(message.from_user.id)
+    bet, err = validate_bet(user, message.text.strip())
+    if bet is None:
+        await message.answer(err); return
+
+    if game == "roulette":
+        await message.answer(
+            f"🎡 Рулетка — ставка {fmt_coins(bet)} 🪙\nВыбери цвет:",
+            parse_mode="HTML",
+            reply_markup=roulette_color_kb(bet)
+        )
+        return
+
+    fake = types.SimpleNamespace(
+        from_user=message.from_user,
+        text=f"/{game} {bet}",
+        answer=message.answer,
+        chat=message.chat,
+        message_id=message.message_id,
+        bot=message.bot,
+    )
+    handlers = {
+        "slots": cmd_slots, "dice": cmd_dice,
+        "blackjack": cmd_blackjack, "crash": cmd_crash,
+        "mines": cmd_mines, "reaction": cmd_reaction,
+        "rps": cmd_rps, "guess": cmd_guess, "math": cmd_mathgame,
+    }
+    if game == "prestige_title":
+        custom = message.text.strip()[:20]
+        uid2 = message.from_user.id
+        lvl2, _ = db.get_prestige(uid2)
+        if lvl2 == 0:
+            await message.answer("❌ Сначала купи статус Prestige (/prestige)")
+        else:
+            db.set_custom_title(uid2, custom)
+            await message.answer(f"✅ Приписка изменена: <b>{custom}</b>", parse_mode="HTML")
+        return
+
+    if game in handlers:
+        await handlers[game](fake)
+
+
+@dp.callback_query(F.data.startswith("roulette_"))
+async def cb_roulette_color(callback: CallbackQuery):
+    """Обрабатываем выбор цвета рулетки из кнопки."""
+    parts = callback.data.split("_")
+    color = parts[1]  # red или black
+    bet   = int(parts[2])
+    uid   = callback.from_user.id
+
+    cd = db.get_game_cooldown(uid, "roulette")
+    if cd > 0:
+        await callback.answer(f"⏳ Подожди {cd} сек!", show_alert=True); return
+
+    user = db.get_user(uid)
+    if user["coins"] < bet:
+        await callback.answer("❌ Недостаточно монет!", show_alert=True); return
+
+    await callback.answer()
+    import types
+    fake = types.SimpleNamespace(
+        from_user=callback.from_user,
+        text=f"/roulette {color} {bet}",
+        answer=callback.message.answer,
+        chat=callback.message.chat,
+        message_id=callback.message.message_id,
+        bot=callback.message.bot,
+    )
+    await cmd_roulette(fake)
+
+
+@dp.callback_query(F.data.startswith("case_"))
+async def cb_case_btn(callback: CallbackQuery):
+    """Открыть кейс по кнопке."""
+    case_key = callback.data.split("_")[1]  # bronze/silver/gold/diamond
+    uid = callback.from_user.id
+
+    cd = db.get_game_cooldown(uid, "case")
+    if cd > 0:
+        await callback.answer(f"⏳ Подожди {cd} сек!", show_alert=True); return
+
+    await callback.answer()
+    import types
+    fake = types.SimpleNamespace(
+        from_user=callback.from_user,
+        text=f"/case {case_key}",
+        answer=callback.message.answer,
+        chat=callback.message.chat,
+        message_id=callback.message.message_id,
+        bot=callback.message.bot,
+    )
+    await cmd_case(fake)
+
+
+@dp.callback_query(F.data.startswith("prestige_buy_"))
+async def cb_prestige_buy(callback: CallbackQuery):
+    """Покупка prestige через кнопку."""
+    uid = callback.from_user.id
+    parts = callback.data.split("_")  # ["prestige","buy","1"]
+    try:
+        lvl_target = int(parts[2])
+    except (IndexError, ValueError):
+        await callback.answer("❌ Ошибка данных", show_alert=True); return
+    usdt = db.get_usdt(uid)
+    lvl, _ = db.get_prestige(uid)
+    levels = db.PRESTIGE_LEVELS
+
+    if lvl_target < 1 or lvl_target > 5:
+        await callback.answer("❌ Неверный уровень", show_alert=True); return
+    if lvl_target <= lvl:
+        await callback.answer("✅ Этот уровень уже куплен!", show_alert=True); return
+
+    p = levels[lvl_target]
+    prev_price = levels[lvl]["price_usdt"]
+    cost = p["price_usdt"] - prev_price
+
+    if usdt < cost:
+        await callback.answer(f"❌ Нужно {cost} USDT, у тебя {usdt}", show_alert=True); return
+
+    db.update_usdt(uid, -cost)
+    db.set_prestige(uid, lvl_target)
+
+    await callback.message.answer(
+        f"🎉 <b>Статус получен!</b>\n\n"
+        f"👑 {p['name']}\n"
+        f"🏷 Приписка: <b>{p['title']}</b>\n"
+        f"💰 Бонус: <b>+{int(p['bonus']*100)}% к выигрышам</b>\n\n"
+        f"✏️ Изменить приписку: /prestige title Текст",
+        parse_mode="HTML"
+    )
+    await callback.answer("✅ Куплено!")
+
+
+@dp.callback_query(F.data == "prestige_owned")
+async def cb_prestige_owned(callback: CallbackQuery):
+    await callback.answer("✅ Этот уровень уже куплен!", show_alert=False)
+
+
+@dp.callback_query(F.data == "prestige_title")
+async def cb_prestige_title(callback: CallbackQuery, state: FSMContext):
+    await state.set_state(BetStates.wait_bet)
+    await state.update_data(game="prestige_title")
+    await callback.message.answer("✏️ Введи новую приписку (до 20 символов):")
+    await callback.answer()
+
+
+
+
+@dp.callback_query(F.data == "noop")
+async def cb_noop(callback: CallbackQuery):
+    await callback.answer()
+
+
+@dp.callback_query(F.data.startswith("case_"))
+async def cb_case_menu(callback: CallbackQuery):
+    """Открытие кейса через кнопку меню."""
+    import types
+    case_name = callback.data.split("_")[1]  # bronze/silver/gold/diamond
+    fake = types.SimpleNamespace(
+        from_user=callback.from_user,
+        text=f"/case {case_name}",
+        answer=callback.message.answer,
+        chat=callback.message.chat,
+        message_id=callback.message.message_id,
+        bot=callback.message.bot,
+    )
+    await cmd_case(fake)
+    await callback.answer()
+
+
+@dp.callback_query(F.data.startswith("bet_"))
+async def cb_bet_quick(callback: CallbackQuery):
+    """Быстрая ставка — сразу запускает игру."""
+    parts = callback.data.split("_")
+    game = parts[1]
+    bet  = int(parts[2])
+    uid  = callback.from_user.id
+
+    import types
+    fake = types.SimpleNamespace(
+        from_user=callback.from_user,
+        text=f"/{game} {bet}",
+        answer=callback.message.answer,
+        chat=callback.message.chat,
+        message_id=callback.message.message_id,
+        bot=callback.message.bot,
+    )
+    handlers = {
+        "slots": cmd_slots, "dice": cmd_dice, "blackjack": cmd_blackjack,
+        "crash": cmd_crash, "mines": cmd_mines,
+        "reaction": cmd_reaction, "rps": cmd_rps,
+        "guess": cmd_guess, "math": cmd_mathgame,
+    }
+    if game == "roulette":
+        await callback.message.answer(
+            f"🎡 Рулетка — ставка {fmt_coins(bet)} 🪙\nВыбери цвет:",
+            parse_mode="HTML",
+            reply_markup=roulette_color_kb(bet)
+        )
+    elif game in handlers:
+        await handlers[game](fake)
     await callback.answer()
 
 
@@ -570,13 +961,18 @@ async def cmd_top(message: Message):
     rows  = db.get_top(10)
     lines = ["🏆 <b>Топ-10 игроков</b>\n"]
     medals = ["🥇","🥈","🥉"] + ["🔸"] * 7
-    medals = ["🥇","🥈","🥉"] + ["🔸"] * 7
     for i, r in enumerate(rows):
-        full  = db.get_user(r["user_id"])
-        vip   = "⭐" if full["is_vip"] else ""
-        dname = display_name(full)
-        rc = fmt_coins(r["coins"]); rl = r["level"]; rw = r["wins"]
-        lines.append(f"{medals[i]} <b>{dname}</b> {vip}\n   💰 {rc} | Ур.{rl} | 🏆{rw}\n")
+        try:
+            full  = db.get_user(r["user_id"]) or r
+            vip   = "⭐" if full.get("is_vip") else ""
+            dname = display_name(full) if isinstance(full, dict) and full.get("full_name") else r.get("full_name","?")
+            rc = fmt_coins(r["coins"]); rl = r["level"]; rw = r["wins"]
+            lines.append(f"{medals[i]} <b>{dname}</b> {vip}\n   💰 {rc} | Ур.{rl} | 🏆{rw}\n")
+        except Exception:
+            lines.append(f"{medals[i]} {r.get('full_name','?')} — {fmt_coins(r['coins'])} 🪙\n")
+    await message.answer("\n".join(lines), parse_mode="HTML")
+
+
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 #  СЛОТЫ  🎰  (с анимацией прокрутки!)
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -2069,15 +2465,17 @@ async def adm_reset_all_cb(callback: CallbackQuery):
 
 
 @dp.callback_query(F.data == "adm_reset_all_confirm")
-async def adm_reset_all_confirm(callback: CallbackQuery):
+async def adm_reset_all_confirm(callback: CallbackQuery, state: FSMContext):
     if not is_admin(callback.from_user.id): return
+    await state.clear()
     db.reset_all_users()
     await callback.message.edit_text("✅ Все игроки обнулены.")
-    await callback.answer()
+    await callback.answer("✅ Готово!")
 
 
 @dp.callback_query(F.data == "adm_reset_all_cancel")
-async def adm_reset_all_cancel(callback: CallbackQuery):
+async def adm_reset_all_cancel(callback: CallbackQuery, state: FSMContext):
+    await state.clear()
     await callback.message.edit_text("❌ Отменено.")
     await callback.answer()
 
@@ -2559,9 +2957,9 @@ async def cmd_prestige(message: Message):
             mark = "✅ " if i == lvl else ("🔒 " if i > lvl else "✓ ")
             lines.append(f"{mark}<b>{p['name']}</b> — {p['price_usdt']} USDT\n"
                          f"   🏷 {p['title']} | +{int(p['bonus']*100)}% к выигрышам")
-        lines.append("\n📝 Купить: <code>/prestige buy 1</code> (номер уровня)")
-        lines.append("✏️ Изменить приписку: <code>/prestige title Мой текст</code>")
-        await message.answer("\n".join(lines), parse_mode="HTML")
+        lines.append("\n✏️ Изменить приписку: <code>/prestige title Мой текст</code>")
+        await message.answer("\n".join(lines), parse_mode="HTML",
+                             reply_markup=prestige_keyboard(lvl))
         return
 
     if args[1] == "buy" and len(args) >= 3:
@@ -4226,7 +4624,7 @@ async def cmd_guess(message: Message):
     )
 
 
-@dp.message(lambda m: m.from_user.id in guess_sessions and m.text and m.text.strip().isdigit())
+@dp.message(lambda m: m.text and m.text.strip().isdigit() and m.from_user.id in guess_sessions)
 async def guess_answer(message: Message):
     uid = message.from_user.id
     sess = guess_sessions.get(uid)
@@ -4301,7 +4699,7 @@ async def cmd_mathgame(message: Message):
     )
 
 
-@dp.message(lambda m: m.from_user.id in math_sessions and m.text and m.text.strip().lstrip("-").isdigit())
+@dp.message(lambda m: m.text and m.text.strip().lstrip("-").isdigit() and m.from_user.id in math_sessions)
 async def math_answer(message: Message):
     uid = message.from_user.id
     sess = math_sessions.get(uid)
