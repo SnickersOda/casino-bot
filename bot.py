@@ -1513,7 +1513,8 @@ async def _crash_loop(uid: int):
 
         sess["current"] = mult
 
-        bar_idx = min(int((mult - 1.0) / max(sess["crash_at"] - 1.0, 0.1) * 10), 10)
+        # Полоса не показывает реальный прогресс до краша
+        bar_idx = min(int((mult - 1.0) / 4.0 * 10), 9)  # растёт просто с коэффициентом
         bar     = BARS[bar_idx]
         pot     = int(sess["bet"] * mult)
         fire    = "🔥" if mult > 3 else ("⚡" if mult > 6 else "")
@@ -1522,8 +1523,7 @@ async def _crash_loop(uid: int):
         try:
             await sess["msg"].edit_text(
                 f"{rocket} <b>{'КРАШ!' if crashed else 'Ракета летит!'}</b> {fire}\n\n"
-                f"📈 Коэффициент: <b>x{mult:.2f}</b>\n"
-                f"{bar}\n\n"
+                f"📈 Коэффициент: <b>x{mult:.2f}</b>\n\n"
                 f"💸 Ставка: {fmt_coins(sess['bet'])} 🪙\n"
                 f"💰 {'Потерял:' if crashed else 'Получишь:'} <b>{fmt_coins(pot) if not crashed else fmt_coins(sess['bet'])} 🪙</b>"
                 + ("" if crashed else "\n\n⏱ <i>Нажми кнопку чтобы забрать!</i>"),
