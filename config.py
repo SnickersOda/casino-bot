@@ -11,6 +11,8 @@ BOT_TOKEN = os.environ.get("BOT_TOKEN", "YOUR_BOT_TOKEN_HERE")
 # 👑 Telegram ID администраторов
 # На Railway задай переменную ADMIN_IDS=123456789 (несколько через запятую: 111,222)
 ADMIN_IDS = [int(x) for x in os.environ.get("ADMIN_IDS", "123456789").split(",") if x.strip().isdigit()]
+# На Railway задай MOD_IDS=111,222 для модераторов
+MOD_IDS   = [int(x) for x in os.environ.get("MOD_IDS", "").split(",") if x.strip().isdigit()]
 
 # 💾 Файл базы данных SQLite
 DB_FILE = "casino.db"
@@ -19,9 +21,9 @@ DB_FILE = "casino.db"
 #  СТАРТОВЫЕ ПАРАМЕТРЫ
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 START_COINS     = 1_000      # монеты при регистрации
-DAILY_BONUS     = 5000        # ежедневный бонус
-MIN_BET         = 100         # минимальная ставка
-MAX_BET         = 999999999999     # максимальная ставка
+DAILY_BONUS     = 200        # ежедневный бонус
+MIN_BET         = 10         # минимальная ставка
+MAX_BET         = 10_000     # максимальная ставка
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 #  ШАНСЫ ИГРЫ (можно менять через /admin)
@@ -99,9 +101,9 @@ SLOT_WEIGHTS  = [30,   25,   20,   15,   6,    3,    1]
 #  ЗАДАНИЯ (сбрасываются каждые 24 часа)
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 DAILY_TASKS = [
-    {"id": "play5",    "desc": "🎮 Сыграть 5 игр",          "target": 5,    "reward": 20000},
-    {"id": "win3",     "desc": "🏆 Выиграть 3 раза",        "target": 3,    "reward": 35000},
-    {"id": "bet1000",  "desc": "💸 Поставить 1 000 монет",  "target": 1000, "reward": 2500},
-    {"id": "slots3",   "desc": "🎰 Сыграть в слоты 3 раза", "target": 3,    "reward": 5000},
-    {"id": "jackpot",  "desc": "💎 Выбить джекпот в слотах","target": 1,    "reward": 50000},
+    {"id": "play5",    "desc": "🎮 Сыграть 5 игр",          "target": 5,    "reward": 300},
+    {"id": "win3",     "desc": "🏆 Выиграть 3 раза",        "target": 3,    "reward": 500},
+    {"id": "bet1000",  "desc": "💸 Поставить 1 000 монет",  "target": 1000, "reward": 200},
+    {"id": "slots3",   "desc": "🎰 Сыграть в слоты 3 раза", "target": 3,    "reward": 250},
+    {"id": "jackpot",  "desc": "💎 Выбить джекпот в слотах","target": 1,    "reward": 2000},
 ]

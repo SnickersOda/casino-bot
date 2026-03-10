@@ -133,6 +133,24 @@ def init_db():
     init_tournament(conn)
     _commit(conn)
 
+    # Добавляем новые колонки если не существуют
+    for col, default in [("usdt", "0"), ("prestige", "0"), ("title", "''")]:
+        try:
+            if USE_PG:
+                _exec(conn, f"ALTER TABLE users ADD COLUMN {col} INTEGER DEFAULT 0")
+            else:
+                _exec(conn, f"ALTER TABLE users ADD COLUMN {col} INTEGER DEFAULT 0")
+            _commit(conn)
+        except: pass
+    # title — текстовая колонка
+    try:
+        if USE_PG:
+            _exec(conn, "ALTER TABLE users ADD COLUMN title TEXT DEFAULT ''")
+        else:
+            _exec(conn, "ALTER TABLE users ADD COLUMN title TEXT DEFAULT ''")
+        _commit(conn)
+    except: pass
+
     _close(conn)
     print(f"✅ БД: {'PostgreSQL' if USE_PG else 'SQLite'}")
 
@@ -577,3 +595,109 @@ def get_referral_count():
     except:
         _close(conn)
         return 0
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+#  USDT & PRESTIGE
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+USDT_RATE = 1000  # монет за 1 USDT
+
+PRESTIGE_LEVELS = {
+    0: {"name": "",        "title": "",              "bonus": 0,    "price_usdt": 0},
+    1: {"name": "🥉 Bronze","title": "💼 Трейдер",    "bonus": 0.02, "price_usdt": 5},
+    2: {"name": "🥈 Silver","title": "📈 Инвестор",   "bonus": 0.05, "price_usdt": 15},
+    3: {"name": "🥇 Gold",  "title": "💎 Акула",      "bonus": 0.08, "price_usdt": 35},
+    4: {"name": "💠 Platinum","title": "🚀 Магнат",   "bonus": 0.12, "price_usdt": 75},
+    5: {"name": "💎 Diamond","title": "👑 Легенда",   "bonus": 0.20, "price_usdt": 150},
+}
+
+def get_usdt(user_id):
+    conn = get_conn()
+    r = _one(conn, "SELECT usdt FROM users WHERE user_id=?", (user_id,))
+    _close(conn)
+    return r["usdt"] if r else 0
+
+def update_usdt(user_id, amount):
+    """amount может быть отрицательным"""
+    conn = get_conn()
+    if USE_PG:
+        _exec(conn, "UPDATE users SET usdt=usdt+%s WHERE user_id=%s", (amount, user_id))
+    else:
+        _exec(conn, "UPDATE users SET usdt=usdt+? WHERE user_id=?", (amount, user_id))
+    _commit(conn); _close(conn)
+
+def get_prestige(user_id):
+    conn = get_conn()
+    r = _one(conn, "SELECT prestige, title FROM users WHERE user_id=?", (user_id,))
+    _close(conn)
+    return (r["prestige"] if r else 0), (r["title"] if r else "")
+
+def set_prestige(user_id, level, title=""):
+    conn = get_conn()
+    if not title:
+        title = PRESTIGE_LEVELS.get(level, {}).get("title", "")
+    if USE_PG:
+        _exec(conn, "UPDATE users SET prestige=%s, title=%s WHERE user_id=%s", (level, title, user_id))
+    else:
+        _exec(conn, "UPDATE users SET prestige=?, title=? WHERE user_id=?", (level, title, user_id))
+    _commit(conn); _close(conn)
+
+def set_custom_title(user_id, title):
+    conn = get_conn()
+    if USE_PG:
+        _exec(conn, "UPDATE users SET title=%s WHERE user_id=%s", (title, user_id))
+    else:
+        _exec(conn, "UPDATE users SET title=? WHERE user_id=?", (title, user_id))
+    _commit(conn); _close(conn)
+
+def get_prestige_bonus(user_id):
+    """Возвращает множитель бонуса (0.0 = нет бонуса, 0.20 = +20%)"""
+    conn = get_conn()
+    r = _one(conn, "SELECT prestige FROM users WHERE user_id=?", (user_id,))
+    _close(conn)
+    lvl = r["prestige"] if r else 0
+    return PRESTIGE_LEVELS.get(lvl, {}).get("bonus", 0.0)
+
+
+def is_banned(user_id):
+    val = get_setting(f"banned_{user_id}")
+    return val == "1"
+
+def get_usdt_rate():
+    """Текущий курс USDT в монетах (базовый 1000, может колебаться)."""
+    val = get_setting("usdt_rate")
+    return int(val) if val else 1000
+
+def set_usdt_rate(rate: int):
+    set_setting("usdt_rate", str(rate))
+
+def reset_user(user_id):
+    """Обнуление игрока."""
+    conn = get_conn()
+    if USE_PG:
+        _exec(conn, "UPDATE users SET coins=1000, usdt=0, prestige=0, title='', wins=0, losses=0, xp=0, level=1, total_bet=0 WHERE user_id=%s", (user_id,))
+    else:
+        _exec(conn, "UPDATE users SET coins=1000, usdt=0, prestige=0, title='', wins=0, losses=0, xp=0, level=1, total_bet=0 WHERE user_id=?", (user_id,))
+    _commit(conn); _close(conn)
+
+def reset_all_users():
+    """Обнуление всех игроков."""
+    conn = get_conn()
+    _exec(conn, "UPDATE users SET coins=1000, usdt=0, prestige=0, title='', wins=0, losses=0, xp=0, level=1, total_bet=0")
+    _commit(conn); _close(conn)
+
+def get_game_cooldown(user_id, game: str) -> int:
+    """Возвращает секунды до конца кулдауна (0 = можно играть)."""
+    COOLDOWNS = {"slots": 30, "dice": 30, "roulette": 30,
+                 "blackjack": 30, "crash": 30, "mines": 30,
+                 "case": 30, "reaction": 30, "guess": 30,
+                 "rps": 30, "math": 30}
+    cd = COOLDOWNS.get(game, 30)
+    last = get_setting(f"cd_{game}_{user_id}")
+    if not last:
+        return 0
+    elapsed = int(time.time()) - int(last)
+    return max(0, cd - elapsed)
+
+def set_game_cooldown(user_id, game: str):
+    set_setting(f"cd_{game}_{user_id}", str(int(time.time())))

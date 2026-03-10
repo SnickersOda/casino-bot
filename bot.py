@@ -3,6 +3,7 @@
 #  Запуск: python bot.py
 # ============================================================
 import asyncio
+from functools import wraps
 import random
 import time
 import json
@@ -62,19 +63,59 @@ class AdminStates(StatesGroup):
 def is_admin(user_id: int) -> bool:
     return user_id in config.ADMIN_IDS
 
+def is_mod(user_id: int) -> bool:
+    return user_id in config.MOD_IDS or user_id in config.ADMIN_IDS
+
 
 def fmt_coins(n: int) -> str:
     """Форматирование числа с разделителями тысяч."""
     return f"{n:,}".replace(",", " ")
 
 
+def display_name(user) -> str:
+    """Имя игрока с prestige титулом."""
+    if not isinstance(user, dict):
+        return str(user)
+    name  = user.get("full_name", "")
+    title = user.get("title", "") or ""
+    if not title:
+        lvl = user.get("prestige", 0) or 0
+        title = db.PRESTIGE_LEVELS.get(lvl, {}).get("title", "")
+    return (title + " " + name).strip() if title else name
+
+
+def apply_prestige(uid: int, payout: int) -> int:
+    """Применяет prestige бонус к выигрышу."""
+    bonus = db.get_prestige_bonus(uid)
+    if bonus > 0:
+        payout = int(payout * (1 + bonus))
+    return payout
+
+def game_cooldown(game_name: str):
+    """Декоратор кулдауна для игр."""
+    def decorator(func):
+        @wraps(func)
+        async def wrapper(message: Message, *args, **kwargs):
+            uid = message.from_user.id
+            cd  = db.get_game_cooldown(uid, game_name)
+            if cd > 0:
+                await message.answer(f"⏳ Подожди <b>{cd} сек.</b> перед следующей игрой!", parse_mode="HTML")
+                return
+            db.set_game_cooldown(uid, game_name)
+            return await func(message, *args, **kwargs)
+        return wrapper
+    return decorator
+
+
 def ensure_registered(func):
-    """Декоратор: автоматически регистрирует пользователя.
-    functools.wraps сохраняет сигнатуру — aiogram не путается с kwargs."""
+    """Декоратор: регистрирует пользователя и проверяет бан."""
     import functools
     @functools.wraps(func)
     async def wrapper(message: Message, **kwargs):
         u = message.from_user
+        if db.is_banned(u.id):
+            await message.answer("🚫 Ваш аккаунт заблокирован.")
+            return
         db.register_user(u.id, u.username, u.full_name)
         return await func(message, **kwargs)
     return wrapper
@@ -315,52 +356,38 @@ async def cmd_start(message: Message):
     bot_info = await bot.get_me()
     bot_username = bot_info.username
 
+    usdt_bal = db.get_usdt(u.id)
+    pres_lvl, _ = db.get_prestige(u.id)
+    pres_name = db.PRESTIGE_LEVELS.get(pres_lvl, {}).get("name", "")
+
     text = (
-        f"🎰 <b>Добро пожаловать в Casino Bot!</b> {vip}\n\n"
-        f"Привет, <b>{u.full_name}</b>!\n"
-        f"На твоём счету: <b>{fmt_coins(user['coins'])} 🪙</b>\n\n"
-        "🃏 <b>Игры:</b>\n"
-        "  /slots — Слоты\n"
-        "  /dice — Кости\n"
-        "  /roulette — Рулетка\n"
-        "  /blackjack — Блэкджек\n"
-        "  /crash — Краш\n"
-        "  /mines — Мины 💣\n"
-        "  /case — Кейсы 🎁\n\n"
-        "💰 <b>Экономика:</b>\n"
-        "  /bank — Вклад под % 🏦\n"
-        "  /send — Перевод монет 💸\n"
-        "  /daily — Ежедневный бонус\n"
-        "  /streak — Стрик 🔥\n\n"
-        "👥 <b>Социальное:</b>\n"
-        "  /ref — Рефералы 👫\n"
-        "  /tournament — Турнир 🏆\n"
-        "  /top — Топ игроков\n\n"
-        "📋 <b>Меню:</b>\n"
-        "  /profile — Профиль\n"
-        "  /balance — Баланс\n"
-        "  /tasks — Задания\n"
-        "  /donate — Магазин ⭐\n"
-        "  /promo — Промокод 🎟\n"
-        "  /help — Помощь\n"
+        f"🎰 <b>Casino Bot</b> {vip}\n"
+        f"Привет, <b>{display_name(user)}</b>!\n"
+        f"💰 {fmt_coins(user['coins'])} 🪙  |  💵 {usdt_bal} USDT"
+        + (f"  |  👑 {pres_name}" if pres_name else "") + "\n"
     )
 
-    # Кнопка добавления в группу сразу с правами администратора
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [
-            InlineKeyboardButton(
-                text="➕ Добавить в группу (с правами админа)",
-                url=(
-                    f"https://t.me/{bot_username}?startgroup=true"
-                    "&admin=change_info+delete_messages+restrict_members"
-                    "+invite_users+pin_messages+manage_video_chats+manage_chat"
-                )
-            )
-        ],
-        [
-            InlineKeyboardButton(text="🎮 Быстрая игра",  callback_data="quick_play"),
-            InlineKeyboardButton(text="⭐ Магазин",       callback_data="open_shop"),
-        ]
+        [InlineKeyboardButton(text="🎰 Слоты",     callback_data="play_slots"),
+         InlineKeyboardButton(text="🎲 Кости",     callback_data="play_dice")],
+        [InlineKeyboardButton(text="🎡 Рулетка",   callback_data="play_roulette"),
+         InlineKeyboardButton(text="🃏 Блэкджек",  callback_data="play_blackjack")],
+        [InlineKeyboardButton(text="🚀 Краш",      callback_data="play_crash"),
+         InlineKeyboardButton(text="💣 Мины",      callback_data="play_mines")],
+        [InlineKeyboardButton(text="⚡ Реакция",   callback_data="play_reaction"),
+         InlineKeyboardButton(text="✂️ КНБ",       callback_data="play_rps")],
+        [InlineKeyboardButton(text="🧠 Угадай число", callback_data="play_guess"),
+         InlineKeyboardButton(text="🔢 Математика",   callback_data="play_math")],
+        [InlineKeyboardButton(text="🎁 Кейсы",     callback_data="menu_cases"),
+         InlineKeyboardButton(text="💱 Биржа USDT", callback_data="menu_exchange")],
+        [InlineKeyboardButton(text="👤 Профиль",   callback_data="menu_profile"),
+         InlineKeyboardButton(text="🏆 Турнир",    callback_data="menu_tournament")],
+        [InlineKeyboardButton(text="🎁 Бонус",     callback_data="menu_daily"),
+         InlineKeyboardButton(text="⭐ Магазин",   callback_data="open_shop")],
+        [InlineKeyboardButton(
+            text="➕ Добавить в группу",
+            url=f"https://t.me/{bot_username}?startgroup=true&admin=change_info+delete_messages+restrict_members+invite_users+pin_messages+manage_video_chats+manage_chat"
+        )],
     ])
 
     await message.answer(text, parse_mode="HTML", reply_markup=keyboard)
@@ -368,15 +395,39 @@ async def cmd_start(message: Message):
 
 @dp.callback_query(F.data == "quick_play")
 async def cb_quick_play(callback: CallbackQuery):
-    await callback.message.answer(
-        "🎮 <b>Выбери игру и введи ставку:</b>\n\n"
-        "🎰 /slots 100\n"
-        "🎲 /dice 100\n"
-        "🎡 /roulette red 100\n"
-        "🃏 /blackjack 100\n"
-        "🚀 /crash 100",
-        parse_mode="HTML"
-    )
+    await callback.answer()
+
+@dp.callback_query(F.data.startswith("play_") | F.data.startswith("menu_"))
+async def cb_start_buttons(callback: CallbackQuery):
+    action = callback.data
+    uid = callback.from_user.id
+    answers = {
+        "play_slots":    "🎰 Слоты: напиши <code>/slots 100</code>",
+        "play_dice":     "🎲 Кости: напиши <code>/dice 100</code>",
+        "play_roulette": "🎡 Рулетка: напиши <code>/roulette red 100</code>",
+        "play_blackjack":"🃏 Блэкджек: напиши <code>/blackjack 100</code>",
+        "play_crash":    "🚀 Краш: напиши <code>/crash 100</code>",
+        "play_mines":    "💣 Мины: напиши <code>/mines 100</code>",
+        "play_reaction": "⚡ Реакция: напиши <code>/reaction 100</code>",
+        "play_rps":      "✂️ КНБ: напиши <code>/rps 100</code>",
+        "play_guess":    "🧠 Угадай число: напиши <code>/guess 100</code>",
+        "play_math":     "🔢 Математика: напиши <code>/mathgame 100</code>",
+        "menu_cases":    "🎁 Кейсы: напиши <code>/case bronze</code>\nЦены в USDT: bronze 1, silver 5, gold 20, diamond 100",
+        "menu_exchange": "💱 Биржа USDT:\n/exchange — обмен монет\nКурс: /usdt",
+        "menu_profile":  None,  # вызовем напрямую
+        "menu_tournament": None,
+        "menu_daily":    None,
+    }
+    if action == "menu_profile":
+        await cmd_profile(callback.message)
+    elif action == "menu_tournament":
+        await cmd_tournament(callback.message)
+    elif action == "menu_daily":
+        await cmd_daily(callback.message)
+    else:
+        txt = answers.get(action, "")
+        if txt:
+            await callback.message.answer(txt, parse_mode="HTML")
     await callback.answer()
 
 
@@ -417,25 +468,35 @@ async def cmd_help(message: Message):
 @dp.message(Command("profile", ignore_mention=True))
 @ensure_registered
 async def cmd_profile(message: Message):
-    user  = db.get_user(message.from_user.id)
+    uid   = message.from_user.id
+    user  = db.get_user(uid)
     vip   = "⭐ VIP" if user["is_vip"] else "Обычный"
     lname = config.LEVEL_NAMES.get(user["level"], "???")
     total = user["wins"] + user["losses"]
     wr    = f"{user['wins']/total*100:.1f}%" if total else "—"
     bar   = level_progress_bar(user["xp"], user["level"])
+    pres_lvl, pres_title = db.get_prestige(uid)
+    pres_name  = db.PRESTIGE_LEVELS.get(pres_lvl, {}).get("name", "")
+    pres_bonus = int(db.get_prestige_bonus(uid) * 100)
+    usdt_bal   = db.get_usdt(uid)
+    dname      = display_name(user)
 
     text = (
-        f"👤 <b>Профиль: {user['full_name']}</b>\n"
+        f"👤 <b>Профиль: {dname}</b>\n"
         f"{'─'*28}\n"
-        f"🏅 Статус: {vip}\n"
-        f"🎖 Уровень: {user['level']} {lname}\n"
+        f"🏅 VIP: {vip}\n"
+        f"👑 Prestige: {pres_name or 'Нет'}"
+        + (f" (+{pres_bonus}% к выигрышам)" if pres_bonus else "") + "\n"
+        + (f"🏷 Приписка: <i>{pres_title}</i>\n" if pres_title else "")
+        + f"🎖 Уровень: {user['level']} {lname}\n"
         f"📊 Прогресс: {bar}\n"
         f"{'─'*28}\n"
-        f"🪙 Монеты:  <b>{fmt_coins(user['coins'])}</b>\n"
-        f"🏆 Побед:   {user['wins']}\n"
+        f"🪙 Монеты: <b>{fmt_coins(user['coins'])}</b>\n"
+        f"💵 USDT: <b>{usdt_bal} USDT</b>\n"
+        f"🏆 Побед: {user['wins']}\n"
         f"💀 Поражений: {user['losses']}\n"
         f"📈 Winrate: {wr}\n"
-        f"💸 Всего поставлено: {fmt_coins(user['total_bet'])}\n"
+        f"💸 Поставлено: {fmt_coins(user['total_bet'])}\n"
     )
     await message.answer(text, parse_mode="HTML")
 
@@ -509,20 +570,19 @@ async def cmd_top(message: Message):
     rows  = db.get_top(10)
     lines = ["🏆 <b>Топ-10 игроков</b>\n"]
     medals = ["🥇","🥈","🥉"] + ["🔸"] * 7
+    medals = ["🥇","🥈","🥉"] + ["🔸"] * 7
     for i, r in enumerate(rows):
-        vip = "⭐" if db.get_user(r["user_id"])["is_vip"] else ""
-        lines.append(
-            f"{medals[i]} <b>{r['full_name']}</b> {vip}\n"
-            f"   💰 {fmt_coins(r['coins'])} | Ур.{r['level']} | 🏆{r['wins']}\n"
-        )
-    await message.answer("\n".join(lines), parse_mode="HTML")
-
-
+        full  = db.get_user(r["user_id"])
+        vip   = "⭐" if full["is_vip"] else ""
+        dname = display_name(full)
+        rc = fmt_coins(r["coins"]); rl = r["level"]; rw = r["wins"]
+        lines.append(f"{medals[i]} <b>{dname}</b> {vip}\n   💰 {rc} | Ур.{rl} | 🏆{rw}\n")
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 #  СЛОТЫ  🎰  (с анимацией прокрутки!)
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 @dp.message(Command("slots", ignore_mention=True))
 @ensure_registered
+@game_cooldown("slots")
 async def cmd_slots(message: Message):
     args = message.text.split()
     if len(args) < 2:
@@ -617,6 +677,7 @@ async def cmd_slots(message: Message):
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 @dp.message(Command("dice", ignore_mention=True))
 @ensure_registered
+@game_cooldown("dice")
 async def cmd_dice(message: Message):
     args = message.text.split()
     if len(args) < 2:
@@ -668,6 +729,7 @@ async def cmd_dice(message: Message):
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 @dp.message(Command("roulette", ignore_mention=True))
 @ensure_registered
+@game_cooldown("roulette")
 async def cmd_roulette(message: Message):
     args = message.text.split()
     if len(args) < 3:
@@ -755,6 +817,7 @@ def _bj_hand_str(cards):
 
 @dp.message(Command("blackjack", ignore_mention=True))
 @ensure_registered
+@game_cooldown("blackjack")
 async def cmd_blackjack(message: Message):
     args = message.text.split()
     if len(args) < 2:
@@ -1769,6 +1832,97 @@ async def cb_test_buy(callback: CallbackQuery):
     )
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+#  МОДЕРАТОР-ПАНЕЛЬ
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+def moder_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📊 Статистика",       callback_data="mod_stats"),
+         InlineKeyboardButton(text="🔍 Найти игрока",     callback_data="mod_search")],
+        [InlineKeyboardButton(text="💬 Написать игроку",  callback_data="mod_msg"),
+         InlineKeyboardButton(text="📢 Рассылка",         callback_data="mod_broadcast")],
+        [InlineKeyboardButton(text="⚠️ Предупреждение",   callback_data="mod_warn"),
+         InlineKeyboardButton(text="📋 Топ нарушителей",  callback_data="mod_warns_top")],
+        [InlineKeyboardButton(text="🎮 Игры игрока",      callback_data="mod_gamelog"),
+         InlineKeyboardButton(text="💰 Баланс игрока",    callback_data="mod_balance")],
+    ])
+
+
+@dp.message(Command("moder", ignore_mention=True))
+async def cmd_moder(message: Message):
+    if not is_mod(message.from_user.id):
+        await message.answer("❌ Нет доступа.")
+        return
+    await message.answer("🛡 <b>Панель модератора</b>", reply_markup=moder_keyboard(), parse_mode="HTML")
+
+
+@dp.callback_query(F.data.startswith("mod_"))
+async def mod_callbacks(callback: CallbackQuery, state: FSMContext):
+    uid = callback.from_user.id
+    if not is_mod(uid):
+        await callback.answer("Нет доступа.", show_alert=True); return
+
+    action = callback.data
+
+    if action == "mod_stats":
+        s = db.get_stats()
+        total = s["total_wins"] + s["total_losses"]
+        wr = f"{s['total_wins']/total*100:.1f}%" if total else "—"
+        rate = db.get_usdt_rate()
+        await callback.message.answer(
+            f"📊 <b>Статистика казино</b>\n\n"
+            f"👥 Игроков: {s['total_users']} (+{s['new_today']} сегодня)\n"
+            f"⭐ VIP: {s['vip_count']}\n"
+            f"🪙 Монет в обращении: {fmt_coins(s['total_coins'])}\n"
+            f"💵 Курс USDT: {rate} 🪙\n"
+            f"🎮 Игр сыграно: {total}\n"
+            f"📈 WR игроков: {wr}",
+            parse_mode="HTML"
+        )
+
+    elif action == "mod_search":
+        await state.set_state(AdminStates.wait_broadcast)
+        await state.update_data(action="mod_search")
+        await callback.message.answer("🔍 Введи имя, @username или ID игрока:")
+
+    elif action == "mod_msg":
+        await state.set_state(AdminStates.wait_give_uid)
+        await state.update_data(action="msg")
+        await callback.message.answer("💬 Введи user_id игрока которому написать:")
+
+    elif action == "mod_broadcast":
+        await state.set_state(AdminStates.wait_broadcast)
+        await state.update_data(action="broadcast")
+        await callback.message.answer("📢 Введи текст рассылки (уйдёт всем игрокам):")
+
+    elif action == "mod_warn":
+        await state.set_state(AdminStates.wait_give_uid)
+        await state.update_data(action="mod_warn")
+        await callback.message.answer("⚠️ Введи user_id игрока для предупреждения:")
+
+    elif action == "mod_warns_top":
+        # Топ по предупреждениям
+        rows = db.get_top(20)
+        lines = ["📋 <b>Последние зарегистрированные игроки (топ по монетам):</b>\n"]
+        for r in rows[:10]:
+            warns = int(db.get_setting(f"warns_{r['user_id']}") or 0)
+            w_str = f" ⚠️x{warns}" if warns else ""
+            lines.append(f"• {r['full_name']}{w_str} — {fmt_coins(r['coins'])} 🪙")
+        await callback.message.answer("\n".join(lines), parse_mode="HTML")
+
+    elif action == "mod_gamelog":
+        await state.set_state(AdminStates.wait_give_uid)
+        await state.update_data(action="mod_gamelog")
+        await callback.message.answer("🎮 Введи user_id игрока для просмотра статистики:")
+
+    elif action == "mod_balance":
+        await state.set_state(AdminStates.wait_give_uid)
+        await state.update_data(action="mod_balance")
+        await callback.message.answer("💰 Введи user_id игрока для просмотра баланса:")
+
+    await callback.answer()
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 #  АДМИН-ПАНЕЛЬ
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 def admin_keyboard() -> InlineKeyboardMarkup:
@@ -1785,6 +1939,10 @@ def admin_keyboard() -> InlineKeyboardMarkup:
          InlineKeyboardButton(text="🎟 Промокод",        callback_data="adm_promo")],
         [InlineKeyboardButton(text="🎲 Изменить шанс",   callback_data="adm_chance"),
          InlineKeyboardButton(text="📢 Рассылка",        callback_data="adm_broadcast")],
+        [InlineKeyboardButton(text="🔄 Обнулить игрока", callback_data="adm_reset_one"),
+         InlineKeyboardButton(text="☢️ Обнулить всех",   callback_data="adm_reset_all")],
+        [InlineKeyboardButton(text="🚫 Забанить",        callback_data="adm_ban"),
+         InlineKeyboardButton(text="✅ Разбанить",       callback_data="adm_unban")],
     ])
 
 
@@ -1887,6 +2045,61 @@ async def adm_promo_cb(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
+@dp.callback_query(F.data == "adm_reset_one")
+async def adm_reset_one(callback: CallbackQuery, state: FSMContext):
+    if not is_admin(callback.from_user.id): return
+    await state.set_state(AdminStates.wait_give_uid)
+    await state.update_data(action="reset_one")
+    await callback.message.answer("🔄 Введи user_id игрока для обнуления:")
+    await callback.answer()
+
+
+@dp.callback_query(F.data == "adm_reset_all")
+async def adm_reset_all_cb(callback: CallbackQuery):
+    if not is_admin(callback.from_user.id): return
+    await callback.message.answer(
+        "☢️ <b>Обнулить ВСЕХ игроков?</b>\nЭто сбросит монеты, USDT, prestige, статистику у ВСЕХ!",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text="✅ ДА, ОБНУЛИТЬ ВСЕХ", callback_data="adm_reset_all_confirm"),
+            InlineKeyboardButton(text="❌ Отмена",             callback_data="adm_reset_all_cancel"),
+        ]])
+    )
+    await callback.answer()
+
+
+@dp.callback_query(F.data == "adm_reset_all_confirm")
+async def adm_reset_all_confirm(callback: CallbackQuery):
+    if not is_admin(callback.from_user.id): return
+    db.reset_all_users()
+    await callback.message.edit_text("✅ Все игроки обнулены.")
+    await callback.answer()
+
+
+@dp.callback_query(F.data == "adm_reset_all_cancel")
+async def adm_reset_all_cancel(callback: CallbackQuery):
+    await callback.message.edit_text("❌ Отменено.")
+    await callback.answer()
+
+
+@dp.callback_query(F.data == "adm_ban")
+async def adm_ban_cb(callback: CallbackQuery, state: FSMContext):
+    if not is_admin(callback.from_user.id): return
+    await state.set_state(AdminStates.wait_give_uid)
+    await state.update_data(action="mod_ban")
+    await callback.message.answer("🚫 Введи user_id игрока для бана:")
+    await callback.answer()
+
+
+@dp.callback_query(F.data == "adm_unban")
+async def adm_unban_cb(callback: CallbackQuery, state: FSMContext):
+    if not is_admin(callback.from_user.id): return
+    await state.set_state(AdminStates.wait_give_uid)
+    await state.update_data(action="mod_unban")
+    await callback.message.answer("✅ Введи user_id игрока для разбана:")
+    await callback.answer()
+
+
 @dp.callback_query(F.data == "adm_give")
 async def adm_give_start(callback: CallbackQuery, state: FSMContext):
     if not is_admin(callback.from_user.id):
@@ -1940,6 +2153,113 @@ async def adm_give_uid(message: Message, state: FSMContext):
         except ValueError:
             await message.answer("❌ Неверный ID")
             await state.clear()
+        return
+
+    # mod_warn — отправляем предупреждение
+    if action == "mod_warn":
+        try:
+            wid = int(message.text.strip())
+            count = int(db.get_setting(f"warns_{wid}") or 0) + 1
+            db.set_setting(f"warns_{wid}", str(count))
+            try:
+                await bot.send_message(wid,
+                    f"⚠️ <b>Предупреждение от модератора</b>\n\n"
+                    f"Это твоё предупреждение #{count}.\n"
+                    f"При повторных нарушениях последуют санкции.",
+                    parse_mode="HTML")
+            except: pass
+            await message.answer(f"✅ Предупреждение #{count} отправлено игроку {wid}.")
+        except ValueError:
+            await message.answer("❌ Неверный ID")
+        await state.clear()
+        return
+
+    # mod_gamelog — статистика игр
+    if action == "mod_gamelog":
+        try:
+            gid = int(message.text.strip())
+            u2 = db.get_user(gid)
+            if not u2:
+                await message.answer("❌ Игрок не найден."); await state.clear(); return
+            total_g = u2["wins"] + u2["losses"]
+            wr2 = f"{u2['wins']/total_g*100:.1f}%" if total_g else "—"
+            warns_cnt = db.get_setting(f"warns_{gid}") or "0"
+            await message.answer(
+                f"🎮 <b>Статистика игрока {u2['full_name']}</b>\n\n"
+                f"ID: <code>{gid}</code>\n"
+                f"Уровень: {u2['level']} | XP: {u2['xp']}\n"
+                f"🏆 Побед: {u2['wins']}\n"
+                f"💀 Поражений: {u2['losses']}\n"
+                f"📈 Winrate: {wr2}\n"
+                f"💸 Поставлено всего: {fmt_coins(u2['total_bet'])} 🪙\n"
+                f"⚠️ Предупреждений: {warns_cnt}",
+                parse_mode="HTML"
+            )
+        except ValueError:
+            await message.answer("❌ Неверный ID")
+        await state.clear()
+        return
+
+    # mod_balance — баланс игрока
+    if action == "mod_balance":
+        try:
+            bid2 = int(message.text.strip())
+            u3 = db.get_user(bid2)
+            if not u3:
+                await message.answer("❌ Игрок не найден."); await state.clear(); return
+            usdt3 = db.get_usdt(bid2)
+            pres3 = db.PRESTIGE_LEVELS.get(u3.get("prestige", 0), {}).get("name", "нет")
+            vip3 = "⭐ VIP" if u3["is_vip"] else "Обычный"
+            await message.answer(
+                f"💰 <b>Баланс: {u3['full_name']}</b>\n\n"
+                f"🪙 Монеты: {fmt_coins(u3['coins'])}\n"
+                f"💵 USDT: {usdt3}\n"
+                f"👑 Prestige: {pres3}\n"
+                f"🏅 Статус: {vip3}",
+                parse_mode="HTML"
+            )
+        except ValueError:
+            await message.answer("❌ Неверный ID")
+        await state.clear()
+        return
+
+    # reset_one
+    if action == "reset_one":
+        try:
+            rid = int(message.text.strip())
+            db.reset_user(rid)
+            await message.answer(f"✅ Игрок {rid} обнулён (монеты 1000, всё остальное — 0).")
+        except ValueError:
+            await message.answer("❌ Неверный ID")
+        await state.clear()
+        return
+
+    # mod_ban
+    if action == "mod_ban":
+        try:
+            bid = int(message.text.strip())
+            db.set_setting(f"banned_{bid}", "1")
+            try:
+                await bot.send_message(bid, "🚫 Ваш аккаунт заблокирован администрацией.")
+            except: pass
+            await message.answer(f"✅ Игрок {bid} забанен.")
+        except ValueError:
+            await message.answer("❌ Неверный ID")
+        await state.clear()
+        return
+
+    # mod_unban
+    if action == "mod_unban":
+        try:
+            ubid = int(message.text.strip())
+            db.set_setting(f"banned_{ubid}", "0")
+            try:
+                await bot.send_message(ubid, "✅ Ваш аккаунт разблокирован.")
+            except: pass
+            await message.answer(f"✅ Игрок {ubid} разбанен.")
+        except ValueError:
+            await message.answer("❌ Неверный ID")
+        await state.clear()
         return
 
     try:
@@ -2143,6 +2463,160 @@ async def cmd_promo(message: Message):
 #  РЕФЕРАЛЫ  👫
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
+@dp.message(Command("usdt", ignore_mention=True))
+@ensure_registered
+async def cmd_usdt(message: Message):
+    rate = db.get_usdt_rate()
+    diff = rate - 1000
+    trend = ("📈 +" if diff > 0 else ("📉 " if diff < 0 else "➡️ ")) + (str(abs(diff)) if diff != 0 else "0")
+    await message.answer(
+        f"💵 <b>Курс USDT</b>\n\n"
+        f"Сейчас: <b>1 USDT = {rate} 🪙</b>\n"
+        f"Изменение: {trend} монет от базы (1000)\n\n"
+        f"Курс меняется каждый день с шансом 5%\n"
+        f"💱 Обменять: /exchange",
+        parse_mode="HTML"
+    )
+
+
+@dp.message(Command("exchange", ignore_mention=True))
+@ensure_registered
+async def cmd_exchange(message: Message):
+    """Обмен монет → USDT"""
+    uid  = message.from_user.id
+    args = message.text.split()
+    user = db.get_user(uid)
+    usdt = db.get_usdt(uid)
+    rate = db.get_usdt_rate()  # динамический курс
+
+    if len(args) == 1:
+        # Показываем баланс и курс
+        await message.answer(
+            f"💱 <b>Обмен монет → USDT</b>\n\n"
+            f"💰 Твои монеты: <b>{fmt_coins(user['coins'])} 🪙</b>\n"
+            f"💵 Твои USDT: <b>{usdt} USDT</b>\n\n"
+            f"📊 Курс: <b>1 USDT = {rate} 🪙</b>\n\n"
+            f"Использование: <code>/exchange 5</code> — обменять 5 USDT\n"
+            f"(минимум 1 USDT = 1 000 монет)",
+            parse_mode="HTML"
+        )
+        return
+
+    try:
+        amount_usdt = int(args[1])
+    except ValueError:
+        await message.answer("❌ Укажи количество USDT: <code>/exchange 5</code>", parse_mode="HTML"); return
+
+    if amount_usdt < 1:
+        await message.answer("❌ Минимум 1 USDT"); return
+
+    coins_needed = amount_usdt * rate
+    if user["coins"] < coins_needed:
+        await message.answer(
+            f"❌ Недостаточно монет.\n"
+            f"Нужно: <b>{fmt_coins(coins_needed)} 🪙</b>\n"
+            f"У тебя: <b>{fmt_coins(user['coins'])} 🪙</b>",
+            parse_mode="HTML"
+        ); return
+
+    db.update_coins(uid, -coins_needed)
+    db.update_usdt(uid, amount_usdt)
+    new_coins = db.get_user(uid)["coins"]
+    new_usdt  = db.get_usdt(uid)
+
+    await message.answer(
+        f"✅ <b>Обмен выполнен!</b>\n\n"
+        f"📤 Списано: <b>{fmt_coins(coins_needed)} 🪙</b>\n"
+        f"📥 Получено: <b>{amount_usdt} USDT</b>\n\n"
+        f"💰 Остаток монет: {fmt_coins(new_coins)} 🪙\n"
+        f"💵 Баланс USDT: {new_usdt} USDT",
+        parse_mode="HTML"
+    )
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+#  PRESTIGE / СТАТУС ЗА USDT
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+@dp.message(Command("prestige", ignore_mention=True))
+@ensure_registered
+async def cmd_prestige(message: Message):
+    uid    = message.from_user.id
+    args   = message.text.split()
+    usdt   = db.get_usdt(uid)
+    lvl, title = db.get_prestige(uid)
+    levels = db.PRESTIGE_LEVELS
+
+    # Показ магазина
+    if len(args) == 1:
+        lines = [f"👑 <b>Prestige — статусы за USDT</b>\n\n"
+                 f"💵 Твой USDT: <b>{usdt}</b>\n"
+                 f"⭐ Текущий статус: <b>{levels[lvl]['name'] or 'Нет'}</b>\n"
+                 f"🏷 Приписка: <b>{title or 'нет'}</b>\n"
+                 f"+{int(db.get_prestige_bonus(uid)*100)}% к выигрышам\n\n"
+                 f"<b>Уровни статуса:</b>\n"]
+        for i in range(1, 6):
+            p = levels[i]
+            mark = "✅ " if i == lvl else ("🔒 " if i > lvl else "✓ ")
+            lines.append(f"{mark}<b>{p['name']}</b> — {p['price_usdt']} USDT\n"
+                         f"   🏷 {p['title']} | +{int(p['bonus']*100)}% к выигрышам")
+        lines.append("\n📝 Купить: <code>/prestige buy 1</code> (номер уровня)")
+        lines.append("✏️ Изменить приписку: <code>/prestige title Мой текст</code>")
+        await message.answer("\n".join(lines), parse_mode="HTML")
+        return
+
+    if args[1] == "buy" and len(args) >= 3:
+        try:
+            target_lvl = int(args[2])
+        except ValueError:
+            await message.answer("❌ Укажи уровень: /prestige buy 1"); return
+
+        if target_lvl < 1 or target_lvl > 5:
+            await message.answer("❌ Уровень от 1 до 5"); return
+        if target_lvl <= lvl:
+            await message.answer("❌ У тебя уже есть этот или более высокий статус"); return
+
+        # Цена — разница от текущего
+        p = levels[target_lvl]
+        prev_price = levels[lvl]["price_usdt"]
+        cost = p["price_usdt"] - prev_price
+
+        if usdt < cost:
+            await message.answer(
+                f"❌ Недостаточно USDT.\n"
+                f"Нужно: <b>{cost} USDT</b>\n"
+                f"У тебя: <b>{usdt} USDT</b>\n\n"
+                f"💱 Обменяй монеты: /exchange",
+                parse_mode="HTML"
+            ); return
+
+        db.update_usdt(uid, -cost)
+        db.set_prestige(uid, target_lvl)
+        new_title = p["title"]
+
+        await message.answer(
+            f"🎉 <b>Статус получен!</b>\n\n"
+            f"👑 {p['name']}\n"
+            f"🏷 Приписка: <b>{new_title}</b>\n"
+            f"💰 Бонус к выигрышам: <b>+{int(p['bonus']*100)}%</b>\n\n"
+            f"Твоя приписка теперь везде отображается рядом с именем!\n"
+            f"✏️ Изменить: <code>/prestige title Свой текст</code>",
+            parse_mode="HTML"
+        )
+        return
+
+    if args[1] == "title":
+        if lvl == 0:
+            await message.answer("❌ Сначала купи статус Prestige (/prestige)"); return
+        if len(args) < 3:
+            await message.answer("Укажи текст: <code>/prestige title Мой текст</code>", parse_mode="HTML"); return
+        custom = " ".join(args[2:])[:20]  # макс 20 символов
+        db.set_custom_title(uid, custom)
+        await message.answer(f"✅ Приписка изменена: <b>{custom}</b>", parse_mode="HTML")
+        return
+
+    await message.answer("Использование: /prestige | /prestige buy 1 | /prestige title Текст")
+
+
 @dp.message(Command("ref", ignore_mention=True))
 @ensure_registered
 async def cmd_ref(message: Message):
@@ -2317,7 +2791,7 @@ async def cmd_bank(message: Message):
     if deposit_info and deposit_info["amount"] > 0:
         await message.answer("❌ У тебя уже есть активный вклад. Сначала забери его: /bank забрать"); return
 
-    rates = {1: 0.05, 3: 0.15, 7: 0.40}
+    rates = {1: 0.02, 3: 0.05, 7: 0.10}
     rate  = rates[days]
     db.update_coins(uid, -amount)
     db.create_deposit(uid, amount, rate, days)
@@ -2360,26 +2834,23 @@ async def bank_checker():
 #  КЕЙСЫ  🎁
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
+# Цены кейсов — в USDT!
 CASES = {
     "bronze": {
-        "name": "🥉 Бронзовый кейс", "price": 2500,
-        # мин 500, макс 25 000 | avg ~3 500
-        "prizes": [(500,20),(1500,25),(3000,25),(7000,16),(15000,10),(25000,4)],
+        "name": "🥉 Бронзовый кейс", "price": 1,   # 1 USDT
+        "prizes": [(500,35),(1500,30),(3000,20),(7000,10),(15000,4),(25000,1)],
     },
     "silver": {
-        "name": "🥈 Серебряный кейс", "price": 10000,
-        # мин 3 000, макс 150 000 | avg ~16 000
-        "prizes": [(3000,18),(8000,24),(20000,26),(50000,18),(100000,10),(150000,4)],
+        "name": "🥈 Серебряный кейс", "price": 5,   # 5 USDT
+        "prizes": [(3000,32),(8000,28),(20000,22),(50000,12),(100000,5),(150000,1)],
     },
     "gold": {
-        "name": "🥇 Золотой кейс", "price": 50000,
-        # мин 20 000, макс 2 000 000 | avg ~100 000
-        "prizes": [(20000,15),(60000,24),(150000,26),(400000,18),(900000,12),(2000000,5)],
+        "name": "🥇 Золотой кейс", "price": 20,     # 20 USDT
+        "prizes": [(10000,35),(30000,28),(80000,20),(200000,11),(500000,5),(1000000,1)],
     },
     "diamond": {
-        "name": "💎 Алмазный кейс", "price": 250000,
-        # мин 100 000, макс 10 000 000 | avg ~600 000
-        "prizes": [(100000,12),(300000,22),(750000,26),(2000000,20),(5000000,14),(10000000,6)],
+        "name": "💎 Алмазный кейс", "price": 100,   # 100 USDT
+        "prizes": [(50000,38),(150000,28),(400000,20),(1000000,10),(2500000,3),(5000000,1)],
     },
 }
 
@@ -2398,6 +2869,7 @@ def _open_case(case_key: str) -> int:
 
 @dp.message(Command("case", ignore_mention=True))
 @ensure_registered
+@game_cooldown("case")
 async def cmd_case(message: Message):
     args = message.text.split()
     uid  = message.from_user.id
@@ -2417,12 +2889,21 @@ async def cmd_case(message: Message):
     if key not in CASES:
         await message.answer("❌ Кейс не найден. Доступны: bronze, silver, gold"); return
 
-    case  = CASES[key]
-    price = case["price"]
-    if user["coins"] < price:
-        await message.answer(f"❌ Не хватает монет. Нужно {fmt_coins(price)} 🪙"); return
+    case       = CASES[key]
+    usdt_price = case["price"]
+    user_usdt  = db.get_usdt(uid)
 
-    db.update_coins(uid, -price)
+    if user_usdt < usdt_price:
+        avail = "\n".join(f"• {c['name']} — {c['price']} USDT" for c in CASES.values())
+        await message.answer(
+            f"❌ Недостаточно USDT для {case['name']}\n"
+            f"Нужно: <b>{usdt_price} USDT</b>, у тебя: <b>{user_usdt} USDT</b>\n\n"
+            f"Доступные кейсы:\n{avail}\n\n"
+            f"💱 Обменяй монеты: /exchange (1 000 монет = 1 USDT)",
+            parse_mode="HTML"
+        ); return
+
+    db.update_usdt(uid, -usdt_price)
 
     # Анимация открытия
     msg = await message.answer(f"🎁 Открываем {case['name']}...\n\n🔒 🔒 🔒")
@@ -2433,6 +2914,7 @@ async def cmd_case(message: Message):
     await asyncio.sleep(0.8)
 
     prize = _open_case(key)
+    prize = apply_prestige(uid, prize)
     db.update_coins(uid, prize)
     db.add_xp(uid, 30)
     user_after = db.get_user(uid)
@@ -2483,13 +2965,13 @@ async def cmd_streak(message: Message):
 
 def _streak_bonus(streak: int) -> int:
     """Бонус стрика в монетах (начисляется поверх обычного дейли)."""
-    if streak >= 100: return 100000
-    if streak >= 60:  return 50000
-    if streak >= 30:  return 25000
-    if streak >= 14:  return 10000
-    if streak >= 7:   return 5000
-    if streak >= 3:   return 2000
-    if streak >= 2:   return 500
+    if streak >= 100: return 5000
+    if streak >= 60:  return 2000
+    if streak >= 30:  return 1000
+    if streak >= 14:  return 500
+    if streak >= 7:   return 200
+    if streak >= 3:   return 100
+    if streak >= 2:   return 50
     return 0
 
 
@@ -2539,6 +3021,7 @@ def _mines_kb(uid: int, revealed: set, mine_positions: set, exploded=False, cash
 
 @dp.message(Command("mines", ignore_mention=True))
 @ensure_registered
+@game_cooldown("mines")
 async def cmd_mines(message: Message):
     args = message.text.split()
     uid  = message.from_user.id
@@ -2704,7 +3187,7 @@ async def cmd_tournament(message: Message):
     my_pos = db.get_tournament_position(uid)
     my_pts = db.get_tournament_points(uid)
 
-    prizes = {1: 50000, 2: 25000, 3: 10000, 4: 5000, 5: 2500}
+    prizes = {1: 5000, 2: 2500, 3: 1000, 4: 500, 5: 250}
     ends   = db.get_tournament_end()
     now    = int(time.time())
     left   = max(0, ends - now)
@@ -2751,7 +3234,7 @@ async def tournament_checker():
 
 async def _finish_tournament():
     top = db.get_tournament_top(5)
-    prizes = {0: 50000, 1: 25000, 2: 10000, 3: 5000, 4: 2500}
+    prizes = {0: 5000, 1: 2500, 2: 1000, 3: 500, 4: 250}
     for i, row in enumerate(top):
         prize = prizes.get(i, 0)
         if prize:
@@ -3555,6 +4038,337 @@ async def start_web_panel():
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 #  ЗАПУСК
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+#  СКИЛОВЫЕ ИГРЫ (реакция, угадайка, КНБ, математика)
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+# Хранилища состояний
+reaction_sessions: dict = {}  # uid -> {bet, start_time, msg_id}
+guess_sessions: dict    = {}  # uid -> {bet, number}
+math_sessions: dict     = {}  # uid -> {bet, answer}
+rps_sessions: dict      = {}  # uid -> {bet}
+
+@dp.message(Command("reaction", ignore_mention=True))
+@ensure_registered
+@game_cooldown("reaction")
+async def cmd_reaction(message: Message):
+    """Нажми кнопку быстрее всех! Чем быстрее — тем больше множитель."""
+    uid = message.from_user.id
+    args = message.text.split()
+    user = db.get_user(uid)
+    bet, err = validate_bet(user, args[1] if len(args) > 1 else "")
+    if bet is None:
+        await message.answer(err); return
+
+    db.update_coins(uid, -bet)
+    delay = random.uniform(2.0, 6.0)
+    msg = await message.answer(
+        f"⚡ <b>Игра на реакцию!</b>\n\n"
+        f"Ставка: {fmt_coins(bet)} 🪙\n\n"
+        f"👀 Жди сигнала... и нажми кнопку <b>КАК МОЖНО БЫСТРЕЕ!</b>",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text="⏳ Жди...", callback_data="reaction_wait")
+        ]])
+    )
+    reaction_sessions[uid] = {
+        "bet": bet, "start": None, "active": False,
+        "msg_id": msg.message_id, "delay": delay
+    }
+    await asyncio.sleep(delay)
+    if uid not in reaction_sessions:
+        return
+    reaction_sessions[uid]["active"] = True
+    reaction_sessions[uid]["start"]  = time.time()
+    try:
+        await msg.edit_text(
+            f"⚡ <b>ЖМИИИ!!!</b> 🟢\n\nСтавка: {fmt_coins(bet)} 🪙",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+                InlineKeyboardButton(text="🟢 ЖМИ СЕЙЧАС!", callback_data=f"reaction_go_{uid}")
+            ]])
+        )
+    except: pass
+
+
+@dp.callback_query(F.data == "reaction_wait")
+async def reaction_wait(callback: CallbackQuery):
+    await callback.answer("Ещё не время! Жди зелёного сигнала.", show_alert=False)
+
+
+@dp.callback_query(F.data.startswith("reaction_go_"))
+async def reaction_go(callback: CallbackQuery):
+    target_uid = int(callback.data.split("_")[2])
+    uid = callback.from_user.id
+    if uid != target_uid:
+        await callback.answer("Это не твоя игра!", show_alert=True); return
+
+    sess = reaction_sessions.pop(uid, None)
+    if not sess or not sess["active"]:
+        await callback.answer("Игра уже завершена."); return
+
+    elapsed = time.time() - sess["start"]
+    bet = sess["bet"]
+
+    # Множитель: <0.3с → x3, <0.5с → x2.5, <0.8с → x2, <1.2с → x1.5, иначе x1.1
+    if elapsed < 0.3:
+        mult, grade = 3.0, "🏆 МГНОВЕННО!"
+    elif elapsed < 0.5:
+        mult, grade = 2.5, "⚡ Молния!"
+    elif elapsed < 0.8:
+        mult, grade = 2.0, "🔥 Быстро!"
+    elif elapsed < 1.2:
+        mult, grade = 1.5, "👍 Неплохо"
+    else:
+        mult, grade = 1.1, "🐢 Медленно..."
+
+    payout = apply_prestige(uid, int(bet * mult))
+    db.update_coins(uid, payout)
+    db.record_game(uid, True, payout)
+
+    await callback.message.edit_text(
+        f"⚡ <b>Результат реакции</b>\n\n"
+        f"{grade}\n"
+        f"⏱ Время: <b>{elapsed:.3f} сек</b>\n"
+        f"💰 x{mult} → +{fmt_coins(payout)} 🪙",
+        parse_mode="HTML"
+    )
+    await callback.answer()
+
+
+@dp.message(Command("rps", ignore_mention=True))
+@ensure_registered
+@game_cooldown("rps")
+async def cmd_rps(message: Message):
+    """Камень-ножницы-бумага против бота."""
+    uid = message.from_user.id
+    args = message.text.split()
+    user = db.get_user(uid)
+    bet, err = validate_bet(user, args[1] if len(args) > 1 else "")
+    if bet is None:
+        await message.answer(err); return
+
+    db.update_coins(uid, -bet)
+    rps_sessions[uid] = {"bet": bet}
+    await message.answer(
+        f"✂️ <b>Камень-Ножницы-Бумага</b>\n\nСтавка: {fmt_coins(bet)} 🪙\n\nВыбери:",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text="🪨 Камень",   callback_data=f"rps_rock_{uid}"),
+            InlineKeyboardButton(text="✂️ Ножницы",  callback_data=f"rps_scissors_{uid}"),
+            InlineKeyboardButton(text="📄 Бумага",   callback_data=f"rps_paper_{uid}"),
+        ]])
+    )
+
+
+@dp.callback_query(F.data.startswith("rps_"))
+async def rps_choice(callback: CallbackQuery):
+    parts = callback.data.split("_")
+    choice = parts[1]
+    target_uid = int(parts[2])
+    uid = callback.from_user.id
+    if uid != target_uid:
+        await callback.answer("Это не твоя игра!", show_alert=True); return
+
+    sess = rps_sessions.pop(uid, None)
+    if not sess:
+        await callback.answer("Игра устарела."); return
+
+    bet = sess["bet"]
+    options = ["rock", "scissors", "paper"]
+    bot_choice = random.choice(options)
+    names = {"rock": "🪨 Камень", "scissors": "✂️ Ножницы", "paper": "📄 Бумага"}
+
+    beats = {"rock": "scissors", "scissors": "paper", "paper": "rock"}
+    if choice == bot_choice:
+        result, payout = "🤝 Ничья!", bet
+        db.update_coins(uid, payout)
+    elif beats[choice] == bot_choice:
+        payout = apply_prestige(uid, int(bet * 1.9))
+        db.update_coins(uid, payout)
+        db.record_game(uid, True, payout)
+        result = f"🏆 Ты победил! +{fmt_coins(payout)} 🪙"
+    else:
+        payout = 0
+        db.record_game(uid, False, bet)
+        result = f"💀 Ты проиграл! -{fmt_coins(bet)} 🪙"
+
+    await callback.message.edit_text(
+        f"✂️ <b>КНБ</b>\n\n"
+        f"Ты: {names[choice]}  |  Бот: {names[bot_choice]}\n\n"
+        f"{result}",
+        parse_mode="HTML"
+    )
+    await callback.answer()
+
+
+@dp.message(Command("guess", ignore_mention=True))
+@ensure_registered
+@game_cooldown("guess")
+async def cmd_guess(message: Message):
+    """Угадай число 1-100 за 3 попытки."""
+    uid = message.from_user.id
+    args = message.text.split()
+    user = db.get_user(uid)
+    bet, err = validate_bet(user, args[1] if len(args) > 1 else "")
+    if bet is None:
+        await message.answer(err); return
+
+    number = random.randint(1, 100)
+    db.update_coins(uid, -bet)
+    guess_sessions[uid] = {"bet": bet, "number": number, "attempts": 0, "max": 5}
+    await message.answer(
+        f"🧠 <b>Угадай число от 1 до 100</b>\n\n"
+        f"Ставка: {fmt_coins(bet)} 🪙\n"
+        f"У тебя <b>5 попыток</b>. Угадай с 1-й — x5, с 2-й — x3, далее x1.5\n\n"
+        f"Введи число:",
+        parse_mode="HTML"
+    )
+
+
+@dp.message(lambda m: m.from_user.id in guess_sessions and m.text and m.text.strip().isdigit())
+async def guess_answer(message: Message):
+    uid = message.from_user.id
+    sess = guess_sessions.get(uid)
+    if not sess: return
+
+    try:
+        guess = int(message.text.strip())
+    except:
+        return
+
+    if not 1 <= guess <= 100:
+        await message.answer("Число должно быть от 1 до 100!"); return
+
+    sess["attempts"] += 1
+    number = sess["number"]
+    attempts = sess["attempts"]
+
+    if guess == number:
+        bet = sess["bet"]
+        mult = {1: 5.0, 2: 3.0}.get(attempts, 1.5)
+        payout = apply_prestige(uid, int(bet * mult))
+        db.update_coins(uid, payout)
+        db.record_game(uid, True, payout)
+        del guess_sessions[uid]
+        await message.answer(
+            f"🎉 <b>Угадал!</b> Число было {number}\n"
+            f"Попытка #{attempts} → x{mult} → +{fmt_coins(payout)} 🪙",
+            parse_mode="HTML"
+        )
+    elif attempts >= sess["max"]:
+        db.record_game(uid, False, sess["bet"])
+        del guess_sessions[uid]
+        await message.answer(f"💀 Попытки кончились. Число было <b>{number}</b>. -{fmt_coins(sess['bet'])} 🪙", parse_mode="HTML")
+    else:
+        hint = "🔥 Горячо!" if abs(guess - number) <= 5 else ("♨️ Тепло" if abs(guess - number) <= 15 else "🧊 Холодно")
+        direction = "📈 Больше" if guess < number else "📉 Меньше"
+        left = sess["max"] - attempts
+        await message.answer(f"{hint} | {direction} | Осталось попыток: {left}")
+
+
+@dp.message(Command("mathgame", ignore_mention=True))
+@ensure_registered
+@game_cooldown("math")
+async def cmd_mathgame(message: Message):
+    """Реши пример быстро — получи награду."""
+    uid = message.from_user.id
+    args = message.text.split()
+    user = db.get_user(uid)
+    bet, err = validate_bet(user, args[1] if len(args) > 1 else "")
+    if bet is None:
+        await message.answer(err); return
+
+    # Генерация примера
+    ops = ["+", "-", "*"]
+    op = random.choice(ops)
+    if op == "*":
+        a, b2 = random.randint(2, 12), random.randint(2, 12)
+    else:
+        a, b2 = random.randint(10, 99), random.randint(10, 99)
+    answer = eval(f"{a}{op}{b2}")
+    expr = f"{a} {op} {b2}"
+
+    db.update_coins(uid, -bet)
+    math_sessions[uid] = {"bet": bet, "answer": answer, "start": time.time()}
+    await message.answer(
+        f"🔢 <b>Математика</b>\n\n"
+        f"Сколько будет: <b>{expr} = ?</b>\n\n"
+        f"Ставка: {fmt_coins(bet)} 🪙\n"
+        f"⚡ Быстрее — больше множитель! (<10с → x2, <20с → x1.5, иначе x1.2)\n\n"
+        f"Введи ответ числом:",
+        parse_mode="HTML"
+    )
+
+
+@dp.message(lambda m: m.from_user.id in math_sessions and m.text and m.text.strip().lstrip("-").isdigit())
+async def math_answer(message: Message):
+    uid = message.from_user.id
+    sess = math_sessions.get(uid)
+    if not sess: return
+
+    try:
+        ans = int(message.text.strip())
+    except:
+        return
+
+    elapsed = time.time() - sess["start"]
+    correct = sess["answer"]
+    bet = sess["bet"]
+    del math_sessions[uid]
+
+    if ans == correct:
+        mult = 2.0 if elapsed < 10 else (1.5 if elapsed < 20 else 1.2)
+        payout = apply_prestige(uid, int(bet * mult))
+        db.update_coins(uid, payout)
+        db.record_game(uid, True, payout)
+        await message.answer(
+            f"✅ <b>Правильно!</b> ({correct})\n"
+            f"⏱ {elapsed:.1f}с → x{mult} → +{fmt_coins(payout)} 🪙",
+            parse_mode="HTML"
+        )
+    else:
+        db.record_game(uid, False, bet)
+        await message.answer(
+            f"❌ Неверно. Правильный ответ: <b>{correct}</b>\n"
+            f"Потерял {fmt_coins(bet)} 🪙",
+            parse_mode="HTML"
+        )
+
+
+async def usdt_rate_checker():
+    """Каждый день с 5% шансом курс USDT меняется на ±5-20%."""
+    await asyncio.sleep(5)
+    while True:
+        now = datetime.now()
+        # Ждём следующего дня 12:00
+        next_run = now.replace(hour=12, minute=0, second=0, microsecond=0)
+        if next_run <= now:
+            next_run = next_run.replace(day=now.day + 1)
+        await asyncio.sleep((next_run - now).total_seconds())
+
+        if random.random() < 0.05:  # 5% шанс
+            direction = random.choice([-1, 1])
+            pct = random.randint(5, 20)
+            base = 1000
+            change = int(base * pct / 100) * direction
+            new_rate = max(500, min(2000, base + change))
+            db.set_usdt_rate(new_rate)
+            diff_str = f"+{change}" if change > 0 else str(change)
+            # Уведомляем всех активных игроков
+            uids = db.get_all_user_ids()
+            emoji = "📈" if direction > 0 else "📉"
+            for uid in uids:
+                try:
+                    await bot.send_message(uid,
+                        f"{emoji} <b>Курс USDT изменился!</b>\n\n"
+                        f"1 USDT теперь = <b>{new_rate} 🪙</b> ({diff_str} монет)\n"
+                        f"💱 /exchange — обменять",
+                        parse_mode="HTML")
+                    await asyncio.sleep(0.05)
+                except: pass
+
+
 async def on_startup():
     db.init_db()
     print("✅ База данных инициализирована")
@@ -3589,6 +4403,13 @@ async def on_startup():
         BotCommand(command="mines",      description="💣 Игра Мины"),
         BotCommand(command="streak",     description="🔥 Мой стрик"),
         BotCommand(command="tournament", description="🏆 Еженедельный турнир"),
+        BotCommand(command="exchange",     description="💱 Обмен монет в USDT"),
+        BotCommand(command="prestige",     description="👑 Статус за USDT"),
+        BotCommand(command="usdt",         description="💵 Курс USDT"),
+        BotCommand(command="reaction",     description="⚡ Реакция"),
+        BotCommand(command="rps",          description="✂️ КНБ"),
+        BotCommand(command="guess",        description="🧠 Угадай число"),
+        BotCommand(command="mathgame",     description="🔢 Математика"),
         BotCommand(command="notify",     description="🔔 Уведомления о бонусе"),
     ]
     await bot.set_my_commands(user_commands, scope=BotCommandScopeDefault())
@@ -3596,6 +4417,7 @@ async def on_startup():
     # Дополнительные команды для каждого из админов
     admin_extra = user_commands + [
         BotCommand(command="admin",      description="👑 Админ-панель"),
+        BotCommand(command="moder",      description="🛡 Панель модератора"),
     ]
     for admin_id in config.ADMIN_IDS:
         try:
@@ -3623,6 +4445,7 @@ async def main():
     asyncio.create_task(vip_checker())
     asyncio.create_task(daily_notifier())
     asyncio.create_task(bank_checker())
+    asyncio.create_task(usdt_rate_checker())
     asyncio.create_task(tournament_checker())
 
     webhook_url = os.environ.get("WEBHOOK_URL", "")
